@@ -142,7 +142,6 @@ describe("sidebar projection memo", () => {
     owner.restoreSidebarSnapshot({
       ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
       mode: "chip",
-      sessions: rows,
       entries: [],
       sections: [
         {
