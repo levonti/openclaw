@@ -89,7 +89,11 @@ export function hidePersonalSidebarCatalog(
 export function createSidebarPinnedSessions(
   host: Pick<
     PersonalNavigationHost,
-    "sessionDataContext" | "findSidebarSessionByKey" | "navigationCatalog"
+    | "sessionDataContext"
+    | "findSidebarSessionByKey"
+    | "navigationCatalog"
+    | "getSessionNavigationState"
+    | "getRouteSessionKey"
   > & {
     readonly isConnected: boolean;
     readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
@@ -98,7 +102,7 @@ export function createSidebarPinnedSessions(
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;
   const requested = new Map<string, "pending" | "settled">();
-  const rows = new Map<string, GatewaySessionRow>();
+  const rows = new Map<string, () => SidebarRecentSession>();
 
   function synchronize() {
     const nextSource = host.sessionDataContext?.sessions;
@@ -111,35 +115,23 @@ export function createSidebarPinnedSessions(
     return source;
   }
 
-  function seed(
-    snapshot: readonly Pick<
-      GatewaySessionRow,
-      "key" | "agentId" | "label" | "icon" | "color" | "pinned" | "archived" | "boardFace"
-    >[],
-  ): void {
+  function seed(snapshot: readonly SidebarRecentSession[]): void {
     synchronize();
     if (!scope) {
       return;
     }
     for (const row of snapshot) {
       if (!rows.has(row.key) && requested.get(row.key) !== "settled") {
-        rows.set(row.key, {
-          key: row.key,
-          kind: "direct",
-          updatedAt: null,
-          agentId: row.agentId,
-          label: row.label,
-          icon: row.icon,
-          color: row.color,
-          pinned: row.pinned,
-          archived: row.archived,
-          boardFace: row.boardFace,
-        });
+        rows.set(row.key, () => ({
+          ...row,
+          active: row.key === host.getRouteSessionKey(),
+          visuallyActive: row.key === host.getRouteSessionKey(),
+        }));
       }
     }
   }
 
-  function get(key: string): GatewaySessionRow | undefined {
+  function get(key: string): SidebarRecentSession | undefined {
     const context = host.sessionDataContext;
     const currentSource = synchronize();
     const currentScope = scope;
@@ -159,7 +151,7 @@ export function createSidebarPinnedSessions(
         }
         requested.set(key, "settled");
         if (row) {
-          rows.set(key, row);
+          rows.set(key, () => host.getSessionNavigationState().toSidebarSession(row));
         } else if (!rows.delete(key)) {
           return;
         }
@@ -191,7 +183,7 @@ export function createSidebarPinnedSessions(
       // Cached pins can paint while the selected conversation takes the request budget.
       void context.connectionBootstrap.run(describe, describe, { background: true });
     }
-    return rows.get(key);
+    return rows.get(key)?.();
   }
 
   return { synchronize, seed, get };
@@ -215,7 +207,7 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
       return [live];
     }
     const snapshot = host.pinnedSessions.get(entry.key);
-    return snapshot ? [host.getSessionNavigationState().toSidebarSession(snapshot)] : [];
+    return snapshot ? [snapshot] : [];
   });
   return buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
