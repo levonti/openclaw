@@ -52,20 +52,7 @@ const contractIds = (api: ReturnType<typeof loadChannelSecretContractApi>) =>
 const usePlugins = (...plugins: ReturnType<typeof writePlugin>[]) =>
   mocks.metadata.mockReturnValue({ plugins });
 
-function expectOfficialFallback() {
-  const api = loadContract({
-    channelId: "qqbot",
-    config: { channels: { qqbot: { appId: "app" } } },
-    loadablePluginOrigins: undefined,
-  });
-  expect(contractIds(api)).toEqual([
-    "channels.qqbot.accounts.*.clientSecret",
-    "channels.qqbot.clientSecret",
-  ]);
-  return api;
-}
-
-function writePlugin(params: { pluginId?: string; channelId?: string; directory?: string }) {
+function writePlugin(params: { pluginId?: string; channelId?: string; directory?: string } = {}) {
   const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract", tempDirs);
   const contractDir = path.join(rootDir, params.directory ?? "");
   fs.mkdirSync(contractDir, { recursive: true });
@@ -120,7 +107,7 @@ describe("external channel secret contract api", () => {
   it.runIf(process.platform !== "win32")(
     "loads hardlinked external channel contracts when the plugin hardlink policy allows them",
     () => {
-      const record = writePlugin({});
+      const record = writePlugin();
       const outsideDir = makeTrackedTempDir(
         "openclaw-channel-secret-contract-hardlink-outside",
         tempDirs,
@@ -144,25 +131,33 @@ describe("external channel secret contract api", () => {
   );
 
   it("skips external channel records outside the loadable plugin origin set", () => {
-    const record = writePlugin({});
+    const record = writePlugin();
     usePlugins(record);
     const api = loadContract({ loadablePluginOrigins: new Map([["other", "global"]]) });
 
     expect(api).toBeUndefined();
   });
 
-  it("falls back to official host secret metadata when an external plugin has no artifact", () => {
-    usePlugins();
-
-    const api = expectOfficialFallback();
-    expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
-  });
-
-  it("falls back to official host secret metadata when plugin metadata is unavailable", () => {
-    mocks.metadata.mockImplementation(() => {
-      throw new Error("metadata unavailable");
-    });
-
-    expectOfficialFallback();
-  });
+  it.each(["missing artifact", "unavailable metadata"])(
+    "uses official metadata with %s",
+    (failure) => {
+      if (failure === "missing artifact") {
+        usePlugins();
+      } else {
+        mocks.metadata.mockImplementation(() => {
+          throw new Error("metadata unavailable");
+        });
+      }
+      const api = loadContract({
+        channelId: "qqbot",
+        config: { channels: { qqbot: { appId: "app" } } },
+        loadablePluginOrigins: undefined,
+      });
+      expect(contractIds(api)).toEqual([
+        "channels.qqbot.accounts.*.clientSecret",
+        "channels.qqbot.clientSecret",
+      ]);
+      expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
+    },
+  );
 });

@@ -53,10 +53,8 @@ function expectWarning(
   field = "key",
   dir = defaultAgentDir,
 ) {
-  expect(warnings).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ code, path: `${dir}.auth-profiles.${profileId}.${field}` }),
-    ]),
+  expect(warnings).toContainEqual(
+    expect.objectContaining({ code, path: `${dir}.auth-profiles.${profileId}.${field}` }),
   );
 }
 function expectRefOnly(profile: unknown, provider: string, ref: unknown, field = "key") {
@@ -115,60 +113,49 @@ describe("secrets runtime snapshot inline auth-store refs", () => {
     );
   });
 
-  it("isolates a failed profile ref while materializing an eligible sibling profile", async () => {
-    const agentDir = "/tmp/openclaw-agent-profile-isolation";
-    const coldProfileId = "openai:cold";
-    const healthyProfileId = "anthropic:healthy";
-    const snapshot = await prepareProfiles(
-      {
-        [coldProfileId]: keyProfile("openai", "MISSING_OPENAI_PROFILE_KEY"),
-        [healthyProfileId]: keyProfile("anthropic", "ANTHROPIC_PROFILE_KEY"),
-      },
-      {
-        config: asConfig({}),
-        env: { ANTHROPIC_PROFILE_KEY: "anthropic-runtime-key" },
-        agentDirs: [agentDir],
-      },
-    );
+  it.each(["missing value", "unconfigured provider"])(
+    "isolates a profile with %s",
+    async (failure) => {
+      const agentDir = "/tmp/openclaw-agent-profile-isolation";
+      const coldProfileId = "openai:cold";
+      const healthyProfileId = "anthropic:healthy";
+      const keyRef =
+        failure === "missing value"
+          ? envRef("MISSING_OPENAI_PROFILE_KEY")
+          : { source: "file" as const, provider: "clawrouter_key", id: "value" };
+      const snapshot = await prepareProfiles(
+        {
+          [coldProfileId]: { type: "api_key", provider: "openai", keyRef },
+          [healthyProfileId]: keyProfile("anthropic", "ANTHROPIC_PROFILE_KEY"),
+        },
+        {
+          config: asConfig({ auth: { order: { openai: [coldProfileId] } } }),
+          env: { ANTHROPIC_PROFILE_KEY: "anthropic-runtime-key" },
+          agentDirs: [agentDir],
+        },
+      );
 
-    expect(snapshot.degradedOwners).toMatchObject([
-      {
-        ownerKind: "account",
-        ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId: coldProfileId }),
-        state: "unavailable",
-        degradationState: "cold",
-      },
-    ]);
-    const profiles = snapshot.authStores[0]?.store.profiles;
-    expectRefOnly(profiles?.[coldProfileId], "openai", envRef("MISSING_OPENAI_PROFILE_KEY"));
-    expect(profiles?.[healthyProfileId]).toMatchObject({ key: "anthropic-runtime-key" });
-  });
-
-  it("isolates an auth profile whose SecretRef provider is absent from copied config", async () => {
-    const agentDir = "/tmp/openclaw-agent-copied-auth-store";
-    const profileId = "openai:copied";
-    const keyRef = { source: "file" as const, provider: "clawrouter_key", id: "value" };
-    const snapshot = await prepareProfiles(
-      {
-        [profileId]: { type: "api_key", provider: "openai", keyRef },
-      },
-      {
-        config: asConfig({
-          auth: { order: { openai: [profileId] } },
-        }),
-        agentDirs: [agentDir],
-      },
-    );
-
-    expect(snapshot.degradedOwners).toMatchObject([
-      {
-        ownerKind: "account",
-        ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId }),
-        state: "unavailable",
-        reason: "secret provider is not configured",
-      },
-    ]);
-    expectWarning(snapshot.warnings, "SECRETS_OWNER_UNAVAILABLE", profileId, "key", agentDir);
-    expectRefOnly(snapshot.authStores[0]?.store.profiles[profileId], "openai", keyRef);
-  });
+      expect(snapshot.degradedOwners).toMatchObject([
+        {
+          ownerKind: "account",
+          ownerId: resolveAuthProfileSecretOwnerId({ agentDir, profileId: coldProfileId }),
+          state: "unavailable",
+          degradationState: "cold",
+        },
+      ]);
+      const profiles = snapshot.authStores[0]?.store.profiles;
+      expectRefOnly(profiles?.[coldProfileId], "openai", keyRef);
+      expect(profiles?.[healthyProfileId]).toMatchObject({ key: "anthropic-runtime-key" });
+      if (failure === "unconfigured provider") {
+        expect(snapshot.degradedOwners?.[0]?.reason).toBe("secret provider is not configured");
+        expectWarning(
+          snapshot.warnings,
+          "SECRETS_OWNER_UNAVAILABLE",
+          coldProfileId,
+          "key",
+          agentDir,
+        );
+      }
+    },
+  );
 });

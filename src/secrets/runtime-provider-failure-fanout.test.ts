@@ -1,14 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.js";
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const EXEC_FIXTURE_TIMEOUT_MS = 20_000;
+let root: string;
+beforeEach(() => {
+  root = tempDirs.make("openclaw-provider-failure-");
+});
+const execRef = (provider: string, id: string) => ({ source: "exec" as const, provider, id });
+const providerFailures = (...providers: string[]) =>
+  providers.map((provider) => ({ source: "exec", provider }));
+function failedOwner(ownerKind: string, ownerId: string, ...providers: string[]) {
+  return {
+    ownerKind,
+    ownerId,
+    reason: "secret provider failed",
+    providerFailures: providerFailures(...providers),
+  };
+}
 
-async function writeProvider(root: string, name = "provider", body = "exit 1\n") {
+async function writeProvider(name = "provider", body = "exit 1\n") {
   const command = path.join(root, name + ".sh");
   await fs.writeFile(command, "#!/bin/sh\n" + body, { encoding: "utf8", mode: 0o700 });
   return {
@@ -47,29 +62,19 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = tempDirs.make("openclaw-web-secret-provider-failure-");
-    const vault = await writeProvider(root);
-    const ref = { source: "exec" as const, provider: "vault", id: "web/gemini" };
+    const vault = await writeProvider();
+    const ref = execRef("vault", "web/gemini");
 
     const snapshot = await prepareFailure(
       { vault },
       {
         tools: { web: { search: { provider: "gemini" } } },
-        plugins: {
-          entries: {
-            google: { config: { webSearch: { apiKey: ref } } },
-          },
-        },
+        plugins: { entries: { google: { config: { webSearch: { apiKey: ref } } } } },
       },
     );
 
     expect(snapshot.degradedOwners).toContainEqual(
-      expect.objectContaining({
-        ownerKind: "capability",
-        ownerId: "web-search:gemini",
-        reason: "secret provider failed",
-        providerFailures: [{ source: "exec", provider: "vault" }],
-      }),
+      expect.objectContaining(failedOwner("capability", "web-search:gemini", "vault")),
     );
   });
 
@@ -77,15 +82,13 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = tempDirs.make("openclaw-owner-secret-provider-failure-");
     const callLogPath = path.join(root, "calls.log");
     const shared = await writeProvider(
-      root,
       "provider",
       `printf 'call\\n' >> ${JSON.stringify(callLogPath)}\nexit 1\n`,
     );
-    const modelRef = { source: "exec" as const, provider: "shared", id: "models/openai" };
-    const ttsRef = { source: "exec" as const, provider: "shared", id: "tts/elevenlabs" };
+    const modelRef = execRef("shared", "models/openai");
+    const ttsRef = execRef("shared", "tts/elevenlabs");
 
     const snapshot = await prepareFailure(
       { shared },
@@ -98,18 +101,8 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(modelRef);
     expect(snapshot.config.tts?.providers?.elevenlabs?.apiKey).toEqual(ttsRef);
     expect(snapshot.degradedOwners).toMatchObject([
-      {
-        ownerKind: "provider",
-        ownerId: "openai",
-        reason: "secret provider failed",
-        providerFailures: [{ source: "exec", provider: "shared" }],
-      },
-      {
-        ownerKind: "capability",
-        ownerId: "tts",
-        reason: "secret provider failed",
-        providerFailures: [{ source: "exec", provider: "shared" }],
-      },
+      failedOwner("provider", "openai", "shared"),
+      failedOwner("capability", "tts", "shared"),
     ]);
     expect((await fs.readFile(callLogPath, "utf8")).trim().split("\n")).toHaveLength(1);
   });
@@ -118,26 +111,19 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = tempDirs.make("openclaw-owner-multi-provider-failure-");
-    const first = await writeProvider(root, "first");
-    const second = await writeProvider(root, "second");
+    const first = await writeProvider("first");
+    const second = await writeProvider("second");
 
     const snapshot = await prepareFailure(
       { first, second },
-      modelConfig(
-        { source: "exec", provider: "first", id: "api-key" },
-        { "X-Secondary": { source: "exec", provider: "second", id: "secondary" } },
-      ),
+      modelConfig(execRef("first", "api-key"), { "X-Secondary": execRef("second", "secondary") }),
     );
 
     expect(snapshot.degradedOwners).toMatchObject([
       {
         ownerKind: "provider",
         ownerId: "example",
-        providerFailures: [
-          { source: "exec", provider: "first" },
-          { source: "exec", provider: "second" },
-        ],
+        providerFailures: providerFailures("first", "second"),
       },
     ]);
   });
@@ -146,25 +132,19 @@ describe("provider-scoped SecretRef failure fan-out", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = tempDirs.make("openclaw-owner-mixed-provider-failure-");
-    const unavailable = await writeProvider(root);
+    const unavailable = await writeProvider();
     const refResponse = JSON.stringify({
       protocolVersion: 1,
       values: {},
       errors: { secondary: { code: "NOT_FOUND" } },
     });
-    const partial = await writeProvider(
-      root,
-      "ref",
-      `printf '%s\\n' ${JSON.stringify(refResponse)}\n`,
-    );
+    const partial = await writeProvider("ref", `printf '%s\\n' ${JSON.stringify(refResponse)}\n`);
 
     const snapshot = await prepareFailure(
       { unavailable, partial },
-      modelConfig(
-        { source: "exec", provider: "unavailable", id: "api-key" },
-        { "X-Secondary": { source: "exec", provider: "partial", id: "secondary" } },
-      ),
+      modelConfig(execRef("unavailable", "api-key"), {
+        "X-Secondary": execRef("partial", "secondary"),
+      }),
     );
 
     expect(snapshot.degradedOwners).toMatchObject([
@@ -172,7 +152,7 @@ describe("provider-scoped SecretRef failure fan-out", () => {
         ownerKind: "provider",
         ownerId: "example",
         reason: "secret reference was not found",
-        providerFailures: [{ source: "exec", provider: "unavailable" }],
+        providerFailures: providerFailures("unavailable"),
         refFailureReason: "secret reference was not found",
       },
     ]);
