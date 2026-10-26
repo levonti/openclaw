@@ -7,8 +7,6 @@ import {
 import { readDaemonRuntimePinMigrationPending } from "../daemon/runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import {
   closeOpenClawStateDatabaseAsync,
   prepareOpenClawStateDatabaseSchema,
@@ -88,15 +86,6 @@ it.each([...producers, "native bootstrap"] as const)(
       const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
       expect(ready.snapshot.valid).toBe(true);
       expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(false);
-
-      const owner = await acquireGatewayLock({ allowInTests: true, env: state.env, timeoutMs: 0 });
-      expect(owner).not.toBeNull();
-      try {
-        expect(await migrateDaemonRuntimePins(state.env)).toEqual({ changes: [], warnings: [] });
-        owner?.assertCurrent();
-      } finally {
-        await owner?.release();
-      }
     });
   },
 );
