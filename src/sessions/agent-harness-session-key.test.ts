@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
 import {
-  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
-  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
-  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
+  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE as locked,
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE as reserved,
+  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE as removed,
   isAgentHarnessSessionKey,
   isAgentHarnessSessionKeyOwnedBy,
   isValidAgentHarnessSessionStoreEntry,
@@ -21,6 +21,7 @@ const lockedEntry = {
   modelSelectionLocked: true,
   sessionId: "native-session",
 };
+const legacyLock = { modelSelectionLocked: true, sessionId: "native-session" };
 const entryError = (entry: Parameters<typeof resolveAgentHarnessSessionStoreEntryError>[1]) =>
   resolveAgentHarnessSessionStoreEntryError(harnessKey, entry);
 const contextError = (entry: Parameters<typeof resolveAgentHarnessSessionContextError>[1]) =>
@@ -29,10 +30,8 @@ const contextError = (entry: Parameters<typeof resolveAgentHarnessSessionContext
 it("recognizes the reserved namespace", () => {
   const sessionKey = "harness:codex:supervision:native-thread";
   expect(isAgentHarnessSessionKey(sessionKey)).toBe(true);
-  expect(resolveMissingAgentHarnessSessionError(sessionKey, undefined)).toMatch(/reserved/i);
-  expect(resolveMissingAgentHarnessSessionError(sessionKey, { sessionId: "existing" })).toBe(
-    undefined,
-  );
+  expect(resolveMissingAgentHarnessSessionError(sessionKey, undefined)).toBe(reserved);
+  expect(resolveMissingAgentHarnessSessionError(sessionKey, lockedEntry)).toBeUndefined();
 });
 
 it("ties trusted creation to the matching persisted harness owner", () => {
@@ -48,18 +47,15 @@ it("compares the exact owner segment instead of an owner-id prefix", () => {
     resolveAgentHarnessSessionStoreEntryError(key, { ...lockedEntry, agentHarnessId });
   expect(isAgentHarnessSessionKeyOwnedBy(key, "foo")).toBe(true);
   expect(isAgentHarnessSessionKeyOwnedBy(key, "foo:bar")).toBe(false);
-  expect(checkOwner("foo:bar")).toBe(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  expect(checkOwner("foo:bar")).toBe(reserved);
   expect(checkOwner("foo")).toBeUndefined();
 });
 
 it("validates durable lock metadata for reserved and ordinary rows", () => {
-  const legacyLock = { modelSelectionLocked: true, sessionId: "native-session" };
   expect(entryError(lockedEntry)).toBeUndefined();
   expect(entryError({ ...lockedEntry, modelSelectionLocked: false })).toBeUndefined();
   expect(
-    resolveAgentHarnessSessionStoreEntryError(ordinaryKey, {
-      modelSelectionLocked: false,
-    }),
+    resolveAgentHarnessSessionStoreEntryError(ordinaryKey, { modelSelectionLocked: false }),
   ).toBeUndefined();
   expect(isValidAgentHarnessSessionStoreEntry(ordinaryKey, lockedEntry)).toBe(true);
   expect(resolveAgentHarnessSessionStoreEntryError(ordinaryKey, legacyLock)).toBeUndefined();
@@ -67,11 +63,9 @@ it("validates durable lock metadata for reserved and ordinary rows", () => {
 });
 
 it("requires a valid durable row for protected reserved runtime contexts", () => {
-  expect(contextError(undefined)).toMatch(/reserved/i);
+  expect(contextError(undefined)).toBe(reserved);
   expect(contextError({ ...lockedEntry, modelSelectionLocked: false })).toBeUndefined();
-  expect(contextError({ agentHarnessId: "codex", modelSelectionLocked: true })).toBe(
-    AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
-  );
+  expect(contextError({ agentHarnessId: "codex", modelSelectionLocked: true })).toBe(locked);
   expect(contextError(lockedEntry)).toBeUndefined();
   expect(resolveAgentHarnessSessionContextError(ordinaryKey, undefined)).toBeUndefined();
 });
@@ -79,17 +73,12 @@ it("requires a valid durable row for protected reserved runtime contexts", () =>
 it("rejects a caller-selected session id that would rotate a durable lock", () => {
   expect(resolveAgentHarnessSessionIdMismatchError(lockedEntry, "native-session")).toBeUndefined();
   expect(resolveAgentHarnessSessionIdMismatchError(lockedEntry, "replacement-session")).toBe(
-    AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+    locked,
   );
 });
 
 it("does not turn plugin runtime observation into harness ownership", () => {
-  const entry = {
-    ...lockedEntry,
-    sessionId: "ordinary-session",
-    pluginOwnerId: "model-owner",
-  };
-
+  const entry = { ...lockedEntry, sessionId: "ordinary-session", pluginOwnerId: "model-owner" };
   expect(resolveSessionPinnedHarnessId(entry)).toBeUndefined();
   expect(isValidAgentHarnessSessionStoreEntry(ordinaryKey, entry)).toBe(false);
   expect(resolveAgentHarnessSessionIdMismatchError(entry, "replacement-session")).toBeUndefined();
@@ -114,22 +103,20 @@ it("allows plugin-owned observations to change without releasing the lock or ide
     { pluginOwnerId: "other" },
     { modelSelectionLocked: false },
   ]) {
-    expect(transition(patch)).toBe(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+    expect(transition(patch)).toBe(removed);
   }
-  expect(transition({ sessionId: "replacement" })).toBe(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
+  expect(transition({ sessionId: "replacement" })).toBe(locked);
   expect(
     resolveAgentHarnessSessionStoreTransitionError({
       before: new Map([[ordinaryKey, entry]]),
       store: {},
     }),
-  ).toBe(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  ).toBe(removed);
 });
 
 it("rejects mixed plugin ownership in the reserved native namespace", () => {
   const key = "agent:main:harness:codex:thread";
   const entry = { ...lockedEntry, sessionId: "session", pluginOwnerId: "model-owner" };
-  expect(resolveAgentHarnessSessionStoreEntryError(key, entry)).toBe(
-    AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
-  );
+  expect(resolveAgentHarnessSessionStoreEntryError(key, entry)).toBe(reserved);
   expect(isValidAgentHarnessSessionStoreEntry(key, entry)).toBe(false);
 });
