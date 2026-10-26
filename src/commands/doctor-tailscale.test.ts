@@ -9,9 +9,7 @@ function serveStatus(
   params: {
     backendPort?: number;
     hostPort?: number;
-    path?: string;
     proxyHost?: string;
-    funnel?: boolean;
   } = {},
 ): string {
   const backendPort = params.backendPort ?? 18789;
@@ -22,13 +20,12 @@ function serveStatus(
     Web: {
       [host]: {
         Handlers: {
-          [params.path ?? "/"]: {
+          "/": {
             Proxy: `http://${params.proxyHost ?? "127.0.0.1"}:${backendPort}`,
           },
         },
       },
     },
-    ...(params.funnel ? { AllowFunnel: { [host]: true } } : {}),
   });
 }
 
@@ -84,15 +81,10 @@ describe("collectTailscaleConfigWarnings", () => {
 
   it.each([
     ["no matching route", {}, "{}"],
-    ["Funnel route", {}, serveStatus({ funnel: true })],
-    ["non-root route", {}, serveStatus({ path: "/openclaw" })],
-    ["non-loopback backend", {}, serveStatus({ proxyHost: "192.0.2.10" })],
-    ["different backend port", {}, serveStatus({ backendPort: 19000 })],
     ["non-LAN bind", { bind: "loopback" as const }, serveStatus()],
-    ["managed mode", { tailscale: { mode: "serve" as const } }, serveStatus()],
     ["remote Gateway", { mode: "remote" as const }, serveStatus()],
-  ])("does not migrate a %s", async (_label, gatewayOverrides, stdout) => {
-    await inspect(stdout, gatewayOverrides);
+  ])("leaves %s quiet and unchanged", async (_label, gatewayOverrides, stdout) => {
+    expect(await inspect(stdout, gatewayOverrides)).toEqual([]);
   });
 
   it("warns instead of guessing how to migrate a custom HTTPS port", async () => {

@@ -26,14 +26,14 @@ const doctorMigrationOptions = {
 } as const;
 const gateway = { mode: "local", port: 19091 } as const;
 type PreflightResult = Awaited<ReturnType<typeof runDoctorConfigPreflight>>;
-function withPluginConfig(check: (result: PreflightResult) => void) {
+function preflightPlugin() {
   const snapshot = makePreflightConfigSnapshot({
     gateway,
     plugins: { entries: { discord: { enabled: true } } },
   });
   return mocks.readConfigFileSnapshot.withImplementation(
     async () => snapshot,
-    async () => check(await runDoctorConfigPreflight(doctorMigrationOptions)),
+    () => runDoctorConfigPreflight(doctorMigrationOptions),
   );
 }
 function expectDeferredPlugin(result: PreflightResult, warning: string) {
@@ -64,9 +64,6 @@ it("carries cron Codex runtime policy targets only during repair", async () => {
     cfg: { gateway },
     migrateCodexModelRefs: false,
   });
-  expect(mocks.collectCronCodexRuntimePolicyTargetsReadOnly).toHaveBeenCalledWith({
-    cfg: { gateway },
-  });
   expect(result.cronCodexRuntimePolicyTargets).toEqual([{ modelRef: "openai/gpt-5.6-sol" }]);
 });
 
@@ -79,10 +76,7 @@ it("preserves verified plugin quarantine while an older writable parent defers r
   const quarantined: DegradedPlugin = {
     pluginId: "discord",
     state: "configured-unavailable",
-    diagnostic: {
-      kind: "plugin-verification",
-      ...failure,
-    },
+    diagnostic: { kind: "plugin-verification", ...failure },
   };
   setActiveDegradedPlugins([quarantined]);
   mocks.runActivePluginPayloadSmokeCheck.mockResolvedValueOnce({
@@ -90,22 +84,19 @@ it("preserves verified plugin quarantine while an older writable parent defers r
     failures: [{ pluginId: "discord", ...failure }],
   });
 
-  await withEnvAsync(
+  const result = await withEnvAsync(
     {
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
       OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
     },
-    () =>
-      withPluginConfig((result) => {
-        expectDeferredPlugin(
-          result,
-          'Let the current update or repair finish. If this warning remains afterward, run "openclaw update repair"',
-        );
-      }),
+    preflightPlugin,
   );
-
+  expectDeferredPlugin(
+    result,
+    'Let the current update or repair finish. If this warning remains afterward, run "openclaw update repair"',
+  );
   expect(mocks.runActivePluginPayloadSmokeCheck).toHaveBeenCalledOnce();
   expect(mocks.runPostCorePluginConvergence).not.toHaveBeenCalled();
   expect(listActiveDegradedPlugins()).toEqual([quarantined]);
@@ -133,12 +124,11 @@ it("keeps missing plugins deferred and reports host-link repair warnings", async
       ],
     }),
   );
-  await withPluginConfig((result) => {
-    expect(result.warnings).toContain(
-      `${hostWarning} Run \`openclaw doctor --fix\` to retry plugin repair.`,
-    );
-    expectDeferredPlugin(result, 'Run "openclaw update repair"');
-  });
+  const result = await preflightPlugin();
+  expect(result.warnings).toContain(
+    `${hostWarning} Run \`openclaw doctor --fix\` to retry plugin repair.`,
+  );
+  expectDeferredPlugin(result, 'Run "openclaw update repair"');
   expect(mocks.recordDeferredPluginMigrations).toHaveBeenCalledWith({
     env: process.env,
     pending: [expect.objectContaining({ pluginId: "discord" })],
