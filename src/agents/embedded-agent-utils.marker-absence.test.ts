@@ -32,9 +32,30 @@ function processedCharacters() {
   return canonicalWork.reduce((sum, spy) => sum + characters(spy.mock.calls), 0);
 }
 function appendChunks(stream: ReturnType<typeof createTextProjection>, text: string, size: number) {
-  for (let offset = 0; offset < text.length; offset += size) {
-    stream.append(text.slice(offset, offset + size));
+  chunksOf(text, size).forEach((chunk) => stream.append(chunk));
+}
+
+function expectChunks(
+  stream: ReturnType<typeof createTextProjection>,
+  chunks: Iterable<string>,
+  canonical: (prefix: string) => string,
+) {
+  let prefix = "";
+  let delivered = "";
+  for (const chunk of chunks) {
+    prefix += chunk;
+    const result = stream.append(chunk);
+    delivered = result.delta === null ? result.text : delivered + result.delta;
+    const visible = canonical(prefix);
+    expect(result.text, JSON.stringify(prefix)).toBe(visible);
+    expect(delivered).toBe(visible);
   }
+}
+
+function chunksOf(text: string, size: number) {
+  return Array.from({ length: Math.ceil(text.length / size) }, (_, index) =>
+    text.slice(index * size, (index + 1) * size),
+  );
 }
 
 it.each([undefined, "final_answer"] as const)(
@@ -105,16 +126,7 @@ it.each([
 ])("preserves every prefix and final output for %s", (source, expected = source) => {
   for (const size of [1, 3, 7]) {
     const stream = createAssistantVisibleStreamText();
-    let prefix = "";
-    for (let offset = 0; offset < source.length; offset += size) {
-      const chunk = source.slice(offset, offset + size);
-      const previous = stream.text;
-      prefix += chunk;
-      const result = stream.append(chunk);
-      const visible = sanitizeAssistantVisibleStreamText(prefix);
-      expect(result.text).toBe(visible);
-      expect(result.delta === null ? result.text : previous + result.delta).toBe(visible);
-    }
+    expectChunks(stream, chunksOf(source, size), sanitizeAssistantVisibleStreamText);
     expect(stream.text).toBe(expected ?? source);
   }
 });
@@ -126,11 +138,7 @@ it.each([
   ["<final-result>literal</final-result>", "<final-result>literal</final-result>"],
 ])("preserves user-facing final marker behavior for %s", (source, expected) => {
   const stream = createTextProjection(userFacingTextFilters(false, true));
-  let prefix = "";
-  for (const char of source) {
-    prefix += char;
-    expect(stream.append(char).text).toBe(sanitizeUserFacingText(prefix, { streaming: true }));
-  }
+  expectChunks(stream, source, (prefix) => sanitizeUserFacingText(prefix, { streaming: true }));
   expect(stream.text).toBe(expected);
 });
 
@@ -196,32 +204,22 @@ it.each([
   ]),
 ])("preserves canonical inbound filtering across every split: %s", (source) => {
   const stream = createAssistantVisibleStreamText("final_answer");
-  const expected = new Map<number, string>();
+  const expected = Array.from({ length: source.length + 1 }, (_, end) =>
+    trimTextPreservingCode(
+      sanitizeAssistantVisibleStreamText(source.slice(0, end), "final_answer"),
+    ),
+  );
   const chunkings = [
     ...Array.from({ length: source.length + 1 }, (_, split) => [
       source.slice(0, split),
       source.slice(split),
     ]),
     source.split(""),
-    Array.from({ length: Math.ceil(source.length / 4) }, (_, index) =>
-      source.slice(index * 4, index * 4 + 4),
-    ),
+    chunksOf(source, 4),
   ];
   for (const chunks of chunkings) {
     stream.replace("");
-    let prefix = "";
-    let delivered = "";
-    for (const chunk of chunks) {
-      prefix += chunk;
-      const result = stream.append(chunk);
-      delivered = result.delta === null ? result.text : delivered + result.delta;
-      const canonical =
-        expected.get(prefix.length) ??
-        trimTextPreservingCode(sanitizeAssistantVisibleStreamText(prefix, "final_answer"));
-      expected.set(prefix.length, canonical);
-      expect(result.text, JSON.stringify(prefix)).toBe(canonical);
-      expect(delivered).toBe(canonical);
-    }
+    expectChunks(stream, chunks, (prefix) => expected[prefix.length]!);
   }
   stream.replace("[ordinary] Context: literal");
   expect(stream.append(" answer").text).toBe("[ordinary] Context: literal answer");
