@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
@@ -38,6 +38,29 @@ function badge(kind: string) {
 }
 
 describe("session row placement badges", () => {
+  it("retains PR artwork when a receipt confirms the displayed count", () => {
+    const [count, setCount] = createSignal<number | undefined>(undefined);
+    view = mountSolid(
+      () =>
+        createComponent(SessionRowBadges, {
+          pullRequest: { numbers: [17], state: "open" },
+          get pullRequestCount() {
+            return count();
+          },
+        }),
+      { container },
+    );
+    flush();
+    const original = badge("pull-request");
+    expect(original).not.toBeNull();
+    setCount(1);
+    flush();
+    expect(badge("pull-request")).toBe(original);
+    setCount(2);
+    flush();
+    expect(badge("pull-request")?.textContent).toBe("2");
+  });
+
   it.each([
     ["incognito", { incognito: true }, "Incognito session"],
     ["approval", { hasApproval: true }, "Approval needed"],
