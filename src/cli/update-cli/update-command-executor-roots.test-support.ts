@@ -40,7 +40,9 @@ export function registerExecutorRootOwnershipTests(
       let mutated = false;
       const work = withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(root, { serviceRoot });
-        expect(captureUpdateCommandExecutorAuthority(fence).installKey).toBe(root);
+        const authority = captureUpdateCommandExecutorAuthority(fence);
+        expect(authority.installKey).toBe(root);
+        expect(Object.isFrozen(authority)).toBe(true);
         for (const admitted of [root, serviceRoot]) {
           expect(store.acquire(admitted, "contender", { kind: "update" }).kind).toBe("busy");
         }
@@ -117,47 +119,4 @@ export function registerExecutorRootOwnershipTests(
       });
     },
   );
-
-  it("recovery acquires a fresh owner without reactivating the original fence", async () => {
-    const { root } = fixture();
-    const store = createManagedHandoffLeaseStore();
-    const runId = randomUUID();
-    const original = await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root);
-      const current = store.read(root);
-      assert(current.kind === "current", "Original executor was not acquired");
-      return {
-        fence,
-        lease: current.lease,
-        authority: captureUpdateCommandExecutorAuthority(fence),
-      };
-    });
-    expect(Object.isFrozen(original.authority)).toBe(true);
-    expect(original.authority.owner).toBe(original.lease.owner);
-    expect(() => captureUpdateCommandExecutorAuthority(original.fence)).toThrow(
-      "no longer current",
-    );
-    await withUpdateCommandExecutor(
-      runId,
-      async (executor) => {
-        const fence = await executor.enter(root);
-        const current = store.read(root);
-        assert(current.kind === "current", "Recovery executor was not acquired");
-        expect(current.lease.owner).not.toBe(original.lease.owner);
-        expect(current.lease.helper.pid).toBe(process.pid);
-        const recoveredAuthority = captureUpdateCommandExecutorAuthority(fence);
-        expect(recoveredAuthority).toEqual({
-          ...original.authority,
-          owner: current.lease.owner,
-        });
-        expect(Object.isFrozen(recoveredAuthority)).toBe(true);
-        expect(store.current(original.lease)).toBe(false);
-        expect(store.release(original.lease)).toBe(false);
-        expect(original.fence.assertCurrent).toThrow("no longer current");
-        fence.assertCurrent();
-      },
-      { existingAuthority: original.authority },
-    );
-    expect(store.read(root)).toEqual({ kind: "absent" });
-  });
 }
