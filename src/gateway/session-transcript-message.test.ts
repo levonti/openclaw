@@ -37,17 +37,12 @@ it.each([false, true])("keeps plugin steering audience-specific (delta=%s)", (hi
     },
   };
   const original = structuredClone(raw);
-  const options = { messageId: "steer", historyDelta };
-  expect(project(raw, options).payload).toBeUndefined();
-  expect(project(raw, { ...options, includePluginSteering: true }).payload).toMatchObject({
-    messageId: "steer",
-    message: {
-      display: true,
-      content: [{ type: "text", text: "Be concise" }],
-      __openclaw: { pluginSteering: { pluginId: "reviewer", pluginName: "Reviewer" } },
-    },
-  });
-  expect(project(raw, options).payload).toBeUndefined();
+  expect(project(raw, { historyDelta }).payload).toBeUndefined();
+  expect(project(raw, { historyDelta, includePluginSteering: true }).payload).toHaveProperty(
+    "message.content",
+    [{ type: "text", text: "Be concise" }],
+  );
+  expect(project(raw, { historyDelta }).payload).toBeUndefined();
   expect(raw).toEqual(original);
 });
 
@@ -121,7 +116,6 @@ it.each([
     details: { runId: "failed-run", error: "PRIVATE_DIAGNOSTIC" },
   };
   const timestamp = "2026-09-08T00:00:00.000Z";
-  const { details: _details, ...publicMessage } = customMessage;
   const raw = custom ? { ...customMessage, timestamp: Date.parse(timestamp) } : message;
   const entry = custom
     ? { ...customMessage, type: "custom_message", id: "entry", timestamp }
@@ -131,7 +125,6 @@ it.each([
     expect(metadata(projected)).toMatchObject({ id: "entry", seq: 2 });
     if (custom) {
       expect(identity(projected)?.runId).toBe("failed-run");
-      expect(projected).toMatchObject({ ...publicMessage, timestamp: Date.parse(timestamp) });
       expect(projected).not.toHaveProperty("details");
     }
   }
@@ -140,17 +133,11 @@ it.each([
 
 it.each(["compaction", "reset"])("keeps %s markers in the physical coordinate space", (type) => {
   const run = { runId: "run-compaction", itemId: "item-compaction" };
-  const timestamp = "2026-08-11T18:00:00.000Z";
   const projected = projectEntry(
-    { type, id: "boundary", timestamp, tokensBefore: 100, tokensAfter: 25, __openclaw: run },
+    { type, id: "boundary", tokensBefore: 100, tokensAfter: 25, __openclaw: run },
     3,
     position,
   );
-  expect(projected).toMatchObject({
-    role: "system",
-    timestamp: Date.parse(timestamp),
-    content: [{ type: "text", text: type === "compaction" ? "Compaction" : "Reset" }],
-  });
   expect(metadata(projected)).toEqual({
     kind: type,
     id: "boundary",

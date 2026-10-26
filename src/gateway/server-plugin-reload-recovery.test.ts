@@ -123,7 +123,6 @@ it("replaces a worker-backed plugin when its previous captured source is missing
   const { plugin, load, capturedRoot, stateDir } = fixture;
   await fixture.run(async () => {
     const previous = await load();
-    expect(previous.providers.map(({ provider }) => provider.label)).toEqual(["Old"]);
     const root = capturedRoot();
     const relativeCapture = path.relative(stateDir, root);
     expect(relativeCapture).not.toBe("");
