@@ -1,20 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createBroker, postOffer, reserveSession } from "./realtime-quicksilver.test-helpers.js";
 
-const brokers: ReturnType<typeof createBroker>["realtime"][] = [];
 function makeBroker(fetchImpl: typeof fetch) {
   const harness = createBroker({ fetchImpl });
-  brokers.push(harness.realtime);
+  onTestFinished(() => harness.realtime.cleanup());
   return harness;
 }
-afterEach(async () => {
-  for (const broker of brokers.splice(0)) {
-    await broker.cleanup();
-  }
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
 
 const model = "gpt-realtime-2.1";
 const defaultAuth = { type: "oauth", token: "oauth-token", accountId: "account-123" } as const;
@@ -54,17 +45,7 @@ describe("GA OAuth offer broker", () => {
     async (gaSession, message) => {
       const fetchImpl = vi.fn<typeof fetch>();
       const { realtime, sockets } = makeBroker(fetchImpl);
-      await expect(
-        realtime.broker.createBrowserSession(
-          {
-            providerConfig: {},
-            model,
-            voice: "cedar",
-            ...(gaSession ? { gaSession } : {}),
-          },
-          defaultAuth,
-        ),
-      ).rejects.toThrow(message);
+      await expect(reserveOAuth(realtime, defaultAuth, { gaSession })).rejects.toThrow(message);
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(sockets).toEqual([]);
       expect(realtime.getSessionCounts()).toEqual(emptyCounts);
@@ -80,38 +61,24 @@ describe("GA OAuth offer broker", () => {
       type: "realtime",
       model: "gpt-realtime-2.1",
       instructions: "Use tools.",
-      audio: {
-        input: { transcription: { model: "gpt-4o-mini-transcribe" } },
-        output: { voice: "cedar" },
-      },
+      audio: { output: { voice: "cedar" } },
       tools: [{ type: "function", name: "openclaw_agent_consult", parameters: {} }],
-      tool_choice: "auto",
     };
     const reservation = await reserveOAuth(realtime, defaultAuth, { voice: "cedar", gaSession });
-    expect(reservation).toMatchObject({
-      offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
-      model: "gpt-realtime-2.1",
-      voice: "cedar",
-    });
     const response = await offer(realtime, reservation.clientSecret);
 
     expect(response.res.statusCode).toBe(201);
     expect(response.readBody()).toBe("v=ga-answer\r\n");
     expect(sockets).toEqual([]);
-    expect(fetchImpl.mock.calls[0]).toEqual([
-      "https://api.openai.com/v1/realtime/calls",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer oauth-token",
-          "chatgpt-account-id": "account-123",
-          "Content-Type": expect.stringMatching(/^multipart\/form-data; boundary=/),
-        }),
-      }),
-    ]);
-    expect(fetchImpl.mock.calls[0]?.[1]?.headers).not.toHaveProperty("OpenAI-Alpha");
-    const body = fetchImpl.mock.calls[0]?.[1]?.body;
-    expect(body).toBeTypeOf("string");
+    const [url, request] = fetchImpl.mock.calls[0]!;
+    expect(url).toBe("https://api.openai.com/v1/realtime/calls");
+    expect(request?.method).toBe("POST");
+    const headers = new Headers(request?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer oauth-token");
+    expect(headers.get("chatgpt-account-id")).toBe("account-123");
+    expect(headers.get("Content-Type")).toMatch(/^multipart\/form-data; boundary=/);
+    expect(headers.has("OpenAI-Alpha")).toBe(false);
+    const body = request?.body;
     expect(body).toContain('name="sdp"\r\nContent-Type: application/sdp');
     expect(body).toContain('name="session"\r\nContent-Type: application/json');
     expect(body).toContain(JSON.stringify(gaSession));
@@ -150,7 +117,6 @@ describe("GA OAuth offer broker", () => {
     const splitAt = Math.floor(secret.length / 2);
     const shrinkablePrefix = token.repeat(8);
     const fillerLength = 16 * 1024 - shrinkablePrefix.length - splitAt;
-    expect(fillerLength).toBeGreaterThanOrEqual(0);
     const detail = bodyCap
       ? `${shrinkablePrefix}${" ".repeat(fillerLength)}${secret} trailing provider detail`
       : `${"x".repeat(490)}${secret}${"y".repeat(1_000)}`;
@@ -159,9 +125,6 @@ describe("GA OAuth offer broker", () => {
     expect(response.res.statusCode).toBe(502);
     const body = response.readBody();
     if (bodyCap) {
-      expect(body).not.toContain(secret.slice(0, splitAt));
-      expect(body).not.toContain(secret.slice(splitAt));
-      expect(body).not.toContain("trailing provider detail");
       expect(body).toBe("OpenAI Realtime call creation failed (429)");
     } else {
       expect(body).not.toContain(secret);

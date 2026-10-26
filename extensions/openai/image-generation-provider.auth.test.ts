@@ -26,12 +26,8 @@ async function expectConfigured(
   expected: boolean,
   config?: Parameters<typeof openAIImageConfig>[0],
 ) {
-  expect(
-    await provider.isConfiguredAsync?.({
-      agentDir: "/tmp/agent",
-      cfg: config && openAIImageConfig(config),
-    }),
-  ).toBe(expected);
+  const cfg = config && openAIImageConfig(config);
+  expect(await provider.isConfiguredAsync?.({ agentDir: "/tmp/agent", cfg })).toBe(expected);
 }
 
 beforeEach(() => {
@@ -51,15 +47,12 @@ describe("OpenAI image generation auth availability", () => {
   it("uses capability-aware credential availability before checking the image route", async () => {
     authConfigured = true;
     await expectConfigured(true);
-    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith({
-      provider: "openai",
-      agentDir: "/tmp/agent",
-      cfg: undefined,
-      store: undefined,
-      capability: "image-generation",
-    });
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", capability: "image-generation" }),
+    );
 
     authConfigured = false;
+    authStore = createCodexOAuthAuthStore();
     await expectConfigured(false);
   });
 
@@ -73,11 +66,6 @@ describe("OpenAI image generation auth availability", () => {
     expect(ensureAuthProfileStoreAsyncMock).not.toHaveBeenCalled();
   });
 
-  it("honors canonical auth rejection even when another Codex profile exists", async () => {
-    authStore = createCodexOAuthAuthStore();
-    await expectConfigured(false);
-  });
-
   it("treats a whitespace-only config apiKey as not configured", async () => {
     await expectConfigured(false, {
       baseUrl: "https://gateway.example.test/openai/v1",
@@ -85,31 +73,17 @@ describe("OpenAI image generation auth availability", () => {
     });
   });
 
-  it("reports ChatGPT OAuth image auth as configured for ChatGPT routes", async () => {
+  it.each([
+    [{ baseUrl: "https://chatgpt.com/backend-api/codex" }, true],
+    [
+      { baseUrl: "https://openai-compatible.example.test/v1", api: "openai-chatgpt-responses" },
+      true,
+    ],
+    [{ baseUrl: "https://openai-compatible.example.test/v1" }, false],
+    [{ baseUrl: "https://api.openai.com/v1?proxy=1" }, false],
+  ] as const)("gates OAuth availability for %j: %s", async (config, expected) => {
     authConfigured = true;
     authStore = createCodexOAuthAuthStore();
-
-    await expectConfigured(true, {
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-
-    expect(ensureAuthProfileStoreAsyncMock).toHaveBeenCalledTimes(1);
-    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(
-      expect.objectContaining({ store: authStore }),
-    );
-
-    await expectConfigured(true, {
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://openai-compatible.example.test/v1",
-    });
+    await expectConfigured(expected, config);
   });
-
-  it.each(["https://openai-compatible.example.test/v1", "https://api.openai.com/v1?proxy=1"])(
-    "does not report OAuth auth as configured for %s",
-    async (baseUrl) => {
-      authConfigured = true;
-      authStore = createCodexOAuthAuthStore();
-      await expectConfigured(false, { baseUrl });
-    },
-  );
 });

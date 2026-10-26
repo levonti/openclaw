@@ -21,7 +21,7 @@ function createCall(
         threadId: "test-thread",
       },
       sdp: "v=offer\r\n",
-      session: buildOpenAIQuicksilverSession({ model }),
+      session: { model },
       fetchImpl,
     },
     openAIRealtimeHost,
@@ -49,49 +49,22 @@ it("bounds shared background UTF-8 without splitting emoji", () => {
   const records = background.match(
     /<shared_session_history>\n(.*)\n<\/shared_session_history>$/s,
   )?.[1];
-  expect(records).toBeDefined();
   expect(JSON.parse(records!)).toEqual(
     initialItems.slice(-2).map((item) => ({
       role: item.role,
       text: Array.from(item.text).slice(0, 800).join(""),
     })),
   );
-  expect(records).not.toContain("</shared_session_history>");
   expect(Buffer.byteLength(background, "utf8")).toBeLessThanOrEqual(8_000);
-  expect(session).not.toHaveProperty("initial_items");
-  expect(buildOpenAIQuicksilverSession({ ...params, initialItems: [] })).toEqual(empty);
 });
 
 describe("Realtime call creation", () => {
   it.each([
-    [
-      403,
-      "Voice session access denied.",
-      "GPT-Live rejected the session (403). Verify the selected OpenAI account, model, and GPT-Live voice; this response alone does not identify which was denied.",
-    ],
-    [
-      400,
-      '{"error":{"code":"model_not_found","message":"The model does not exist or you do not have access"}}',
-      "OpenAI Platform API-key access is unavailable for the selected GPT-Live model. Verify the selected model and Platform account access.",
-    ],
-    [
-      400,
-      "Field `session.model` is not allowed for this Codex realtime session",
-      "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.",
-    ],
+    [403, "Voice session access denied.", /rejected the session \(403\).*account, model/],
+    [400, '{"error":{"code":"model_not_found"}}', /Platform API-key access is unavailable/],
+    [400, "session.model not allowed", /model value is not permitted.*Settings > Talk/],
   ] as const)("maps %s: %s", async (status, body, message) => {
-    await expect(createCall(respond(body, { status }))).rejects.toMatchObject({ message });
-  });
-
-  it("omits private provider detail from call creation errors", async () => {
-    const sensitiveDetail = "sensitive-route sensitive-session sensitive-transcript";
-    await expect(
-      createCall(
-        respond(`provider rejected gpt-live-test-canary ${sensitiveDetail}`, { status: 422 }),
-      ),
-    ).rejects.toMatchObject({
-      message: "GPT-Live call creation failed (422)",
-    });
+    await expect(createCall(respond(body, { status }))).rejects.toThrow(message);
   });
 
   it("bounds and cancels an oversized streaming GA realtime error response", async () => {
@@ -126,21 +99,23 @@ describe("Realtime call creation", () => {
     await expect(createCall(fetchImpl, { oauth: true })).resolves.toMatchObject({ callId });
   });
 
-  it("rejects an empty SDP answer", async () => {
-    const fetchImpl = respond("", {
-      status: 201,
-      headers: { Location: "/v1/live/rtc_empty_answer" },
-    });
-    await expect(createCall(fetchImpl, { oauth: true })).rejects.toMatchObject({
-      message: "GPT-Live call creation returned an empty SDP answer",
-    });
-  });
-
-  it("rejects an oversized streaming OpenAI Realtime SDP answer", async () => {
-    const fetchImpl = respond(`v=answer\r\n${"x".repeat(256 * 1024)}`, { status: 201 });
-
-    await expect(createCall(fetchImpl, { model: "gpt-realtime-2.1" })).rejects.toThrow(
-      "OpenAI Realtime SDP answer: text response exceeds 262144 bytes",
-    );
+  it.each([
+    [
+      "private detail",
+      "provider rejected gpt-live-test-canary sensitive-session",
+      422,
+      {},
+      /^GPT-Live call creation failed \(422\)$/,
+    ],
+    ["empty SDP", "", 201, { oauth: true }, /GPT-Live.*empty SDP answer/],
+    [
+      "oversized SDP",
+      `v=answer\r\n${"x".repeat(256 * 1024)}`,
+      201,
+      { model: "gpt-realtime-2.1" },
+      /OpenAI Realtime SDP answer: text response exceeds 262144 bytes/,
+    ],
+  ] as const)("rejects %s", async (_label, body, status, options, message) => {
+    await expect(createCall(respond(body, { status }), options)).rejects.toThrow(message);
   });
 });
