@@ -21,6 +21,17 @@ function useMemoryOnlyStorage() {
     throw new Error("quota");
   });
 }
+function reopen(host: ReturnType<typeof makeChatHost>, connectionEpoch = host.connectionEpoch) {
+  const reopened = makeChatHost({
+    client: host.client,
+    connected: true,
+    sessionKey: host.sessionKey,
+    currentSessionId: host.currentSessionId,
+    connectionEpoch,
+  });
+  onTestFinished(chatOutboxOwner(reopened).subscribe(reopened));
+  return reopened;
+}
 
 async function retainMemoryOnlySend() {
   useMemoryOnlyStorage();
@@ -82,14 +93,7 @@ it.each([false, true])(
 it("replays a memory-only send after its conversation pane is recreated", async () => {
   const { host, firstSend, unsubscribe } = await retainMemoryOnlySend();
   unsubscribe();
-  const reopened = makeChatHost({
-    client: host.client,
-    connected: true,
-    sessionKey: host.sessionKey,
-    currentSessionId: host.currentSessionId,
-    connectionEpoch: host.connectionEpoch + 1,
-  });
-  onTestFinished(chatOutboxOwner(reopened).subscribe(reopened));
+  const reopened = reopen(host, host.connectionEpoch + 1);
 
   expect(reopened.chatQueue).toMatchObject([
     { text: "Synthetic retained input", sendState: "waiting-reconnect" },
@@ -126,14 +130,7 @@ it.each(["acknowledged", "rejected"] as const)(
     const runId = await started.promise;
     chatOutboxOwner(host).admissions.cancelRequests(host);
     unsubscribe();
-    const reopened = makeChatHost({
-      client: host.client,
-      connected: true,
-      sessionKey: host.sessionKey,
-      currentSessionId: host.currentSessionId,
-      connectionEpoch: host.connectionEpoch,
-    });
-    onTestFinished(chatOutboxOwner(reopened).subscribe(reopened));
+    const reopened = reopen(host);
 
     try {
       expect(reopened.chatQueue).toMatchObject([

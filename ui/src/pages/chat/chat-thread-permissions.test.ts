@@ -19,6 +19,21 @@ const permissionMissing = {
   capabilities: ["screenRecording"],
   state: "denied",
 };
+const permissionResult = (timestamp = Date.now()) => ({
+  role: "toolResult",
+  timestamp,
+  toolCallId: "capture",
+  toolName: "nodes",
+  isError: true,
+  content: [{ type: "text", text: "Screen Recording permission is missing." }],
+  details: { permissionMissing },
+});
+const toolCards = (items: ReturnType<typeof buildItems>) =>
+  items.flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.flatMap(({ message }) => extractToolCardsCached(message))
+      : [],
+  );
 
 it.each(["prepare_pr", "publish"])(
   "keeps a sibling permission request when GitHub %s details are hidden",
@@ -58,23 +73,10 @@ it.each(["prepare_pr", "publish"])(
             },
           ],
         },
-        {
-          role: "toolResult",
-          runId: "run",
-          timestamp: 1_002,
-          toolCallId: "capture",
-          toolName: "nodes",
-          isError: true,
-          content: [{ type: "text", text: "Screen Recording permission is missing." }],
-          details: { permissionMissing },
-        },
+        { ...permissionResult(1_002), runId: "run" },
       ],
     });
-    const cards = groups.flatMap((item) =>
-      item.kind === "group"
-        ? item.messages.flatMap(({ message }) => extractToolCardsCached(message))
-        : [],
-    );
+    const cards = toolCards(groups);
     expect(cards.map((card) => card.name)).toEqual(["nodes"]);
     expect(cards[0]?.details).toEqual({ permissionMissing });
   },
@@ -88,26 +90,13 @@ it("projects a scoped permission event and replaces it with its persisted tool r
   handleAgentEvent(host, agentEvent("run", 1, "notice", notice));
   const pending = buildItems({ guardianNotices: host.guardianNotices, showToolCalls: false });
   expect(pending.find((item) => item.kind === "notice")).toMatchObject({ permissionMissing });
-  const result = {
-    role: "toolResult",
-    toolCallId: "capture",
-    toolName: "nodes",
-    timestamp: Date.now(),
-    content: [{ type: "text", text: "Screen Recording permission is missing." }],
-    details: { permissionMissing },
-    isError: true,
-  };
   const restored = buildItems({
-    messages: [result],
+    messages: [permissionResult()],
     guardianNotices: host.guardianNotices,
     showToolCalls: false,
   });
   expect(restored.filter((item) => item.kind === "notice")).toEqual([]);
-  const cards = restored.flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.flatMap(({ message }) => extractToolCardsCached(message))
-      : [],
-  );
+  const cards = toolCards(restored);
   expect(cards).toHaveLength(1);
   expect(cards[0]?.details).toEqual({ permissionMissing });
 });
@@ -124,16 +113,7 @@ it("renders a persisted standalone tool result as a Grant card without expanding
     nativeDeviceSettings?.dispose();
     vi.unstubAllGlobals();
   });
-  const result = {
-    role: "toolResult",
-    toolCallId: "capture",
-    toolName: "nodes",
-    timestamp: Date.now(),
-    content: [{ type: "text", text: "Screen Recording permission is missing." }],
-    details: { permissionMissing },
-    isError: true,
-  };
-  const [group] = groupMessages([{ kind: "message", key: "capture", message: result }]);
+  const [group] = groupMessages([{ kind: "message", key: "capture", message: permissionResult() }]);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());
   if (!group || group.kind !== "group") {

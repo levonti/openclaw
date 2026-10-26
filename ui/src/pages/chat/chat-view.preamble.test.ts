@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { queued, signedText } from "./chat-thread-fixtures.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import {
@@ -29,11 +30,6 @@ const preamble = (text: string, timestamp: number, itemId: string, owner = runId
   timestamp,
   runId: owner,
   openclawStreamFallback: { source: "segment", itemId, runId: owner, replacementText: text },
-});
-const textBlock = (id: string, phase: string, text: string) => ({
-  type: "text",
-  text,
-  textSignature: JSON.stringify({ v: 1, id, phase }),
 });
 const draw = (container: HTMLElement, overrides: Parameters<typeof renderChatInto>[1]) =>
   renderChatInto(container, { runActive: true, runId, streamStartedAt: 1, ...overrides });
@@ -84,15 +80,11 @@ it.each(["explicit", "segment", "tool", "cached"] as const)(
         preamble("Checking the result.", 2, "check"),
       ],
       queue: [
-        {
-          id: "future-send",
-          text: "Run this next.",
-          createdAt: 10,
+        queued("future-send", "Run this next.", 10, "waiting-reconnect", {
           sendRunId: "future-run",
-          sendState: "waiting-reconnect" as const,
           sendSubmittedAtMs: 1,
           sendAttempts: 1,
-        },
+        }),
       ],
     };
     const segment: ChatStreamSegment = { text: "", ts: 1, runId };
@@ -150,8 +142,8 @@ it("leaves unphased answers and mixed-phase narration and final text in the tran
         runId,
         timestamp: 3,
         content: [
-          textBlock("check", "commentary", "Checking once more."),
-          textBlock("answer", "final_answer", "The result is ready."),
+          signedText("Checking once more.", "commentary", "check"),
+          signedText("The result is ready.", "final_answer", "answer"),
         ],
       },
     ],

@@ -49,7 +49,7 @@ it.each(["admission", "rollback"] as const)(
       { key: previousKey, agentId: "main", sessionId: "previous", kind: "direct", updatedAt: 1 },
     ];
     const startupKeys: unknown[] = [];
-    const fixture = createMountedPanes(rows, "main", undefined, {
+    const { context } = createMountedPanes(rows, "main", undefined, {
       "chat.startup": async (_method, raw) => {
         const key = asOptionalRecord(raw)?.sessionKey;
         startupKeys.push(key);
@@ -66,11 +66,9 @@ it.each(["admission", "rollback"] as const)(
         };
       },
     });
-    const { context } = fixture;
     const router = createRouter({ routes: [] });
     Object.assign(context, { basePath: "", router, navigate: vi.fn(), replace: vi.fn() });
     await context.agents.ensureList();
-    const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
     const view = mountSolid(
       () =>
@@ -79,7 +77,7 @@ it.each(["admission", "rollback"] as const)(
         }),
       {
         container,
-        wrapper: provider.wrapper,
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
       },
     );
     try {
@@ -92,6 +90,13 @@ it.each(["admission", "rollback"] as const)(
         page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
         "previous pane",
       );
+      const visible = () => page.querySelector(".chat-pane-cache__pane--visible");
+      const pending = () => page.querySelector("openclaw-pending-session-create");
+      const expectPrevious = (hidden: boolean) => {
+        expect.soft(previousPane.isConnected).toBe(true);
+        expect.soft(previousPane.getAttribute("aria-hidden")).toBe(String(hidden));
+        expect.soft(previousPane.hasAttribute("inert")).toBe(hidden);
+      };
       // History can wait two seconds for its initial stored snapshot before requesting startup.
       await vi.waitFor(() => expect(previousPane.transcriptReady).toBe(true), { timeout: 5_000 });
       await settleChatPage(page);
@@ -108,16 +113,12 @@ it.each(["admission", "rollback"] as const)(
       page.data = { sessionKey, agentId, creation, face: "chat" };
       await settleChatPage(page);
       await settleChatPage(page);
-      expect.soft(previousPane.isConnected).toBe(true);
-      expect.soft(previousPane.getAttribute("aria-hidden")).toBe("true");
-      expect.soft(previousPane.hasAttribute("inert")).toBe(true);
-      expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).not.toContain(
-        "Previous transcript",
+      expectPrevious(true);
+      expect(visible()?.textContent).not.toContain("Previous transcript");
+      expect(pending()).not.toBeNull();
+      expect(visible()?.querySelector(".chat-text")?.textContent?.trim()).toBe(
+        "Hi, I’m New agent. Happy to help.",
       );
-      expect(page.querySelector("openclaw-pending-session-create")).not.toBeNull();
-      expect(
-        page.querySelector(".chat-pane-cache__pane--visible .chat-text")?.textContent?.trim(),
-      ).toBe("Hi, I’m New agent. Happy to help.");
       expect(startupKeys).toEqual([previousKey]);
 
       context.agents.state.pendingAgent = undefined;
@@ -131,30 +132,20 @@ it.each(["admission", "rollback"] as const)(
       await settleChatPage(page);
       await settleChatPage(page);
       await waitForSolid(() =>
-        expect(page.querySelector(".chat-pane-cache__pane--visible")?.textContent).toContain(
+        expect(visible()?.textContent).toContain(
           outcome === "admission" ? "Hi, I’m New agent. Happy to help." : "Previous transcript",
         ),
       );
-      expect(page.querySelector("openclaw-pending-session-create")).toBeNull();
+      expect(pending()).toBeNull();
       expect(
         [...page.querySelectorAll(".chat-text")].filter(
           (entry) => entry.textContent?.trim() === "Hi, I’m New agent. Happy to help.",
         ),
       ).toHaveLength(outcome === "admission" ? 1 : 0);
-      expect
-        .soft(
-          [...page.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].find(
-            (pane) => pane.sessionKey === previousKey,
-          ),
-        )
-        .toBe(previousPane);
-      expect
-        .soft(previousPane.getAttribute("aria-hidden"))
-        .toBe(outcome === "admission" ? "true" : "false");
-      expect.soft(previousPane.hasAttribute("inert")).toBe(outcome === "admission");
-      expect
-        .soft(page.querySelectorAll("openclaw-chat-pane"))
-        .toHaveLength(outcome === "admission" ? 2 : 1);
+      const panes = [...page.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")];
+      expect.soft(panes.find((pane) => pane.sessionKey === previousKey)).toBe(previousPane);
+      expectPrevious(outcome === "admission");
+      expect.soft(panes).toHaveLength(outcome === "admission" ? 2 : 1);
       expect(startupKeys).toEqual(
         outcome === "admission" ? [previousKey, sessionKey] : [previousKey],
       );
