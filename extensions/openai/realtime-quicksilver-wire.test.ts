@@ -64,39 +64,32 @@ it("bounds shared background UTF-8 without splitting emoji", () => {
 
 describe("Realtime call creation", () => {
   it.each([
-    {
-      name: "overloaded rejection",
-      status: 403,
-      body: "Voice session access denied.",
-      message:
-        "GPT-Live rejected the session (403). Verify the selected OpenAI account, model, and GPT-Live voice; this response alone does not identify which was denied.",
-    },
-    {
-      name: "Platform model access denial",
-      status: 400,
-      body: '{"error":{"code":"model_not_found","message":"The model does not exist or you do not have access"}}',
-      message:
-        "OpenAI Platform API-key access is unavailable for the selected GPT-Live model. Verify the selected model and Platform account access.",
-    },
-    {
-      name: "unsupported route model",
-      status: 400,
-      body: "Field `session.model` is not allowed for this Codex realtime session",
-      message:
-        "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.",
-    },
-  ])("maps $name", async ({ status, body, message }) => {
-    const promise = createCall(respond(body, { status }));
-    await expect(promise).rejects.toMatchObject({ message });
+    [
+      403,
+      "Voice session access denied.",
+      "GPT-Live rejected the session (403). Verify the selected OpenAI account, model, and GPT-Live voice; this response alone does not identify which was denied.",
+    ],
+    [
+      400,
+      '{"error":{"code":"model_not_found","message":"The model does not exist or you do not have access"}}',
+      "OpenAI Platform API-key access is unavailable for the selected GPT-Live model. Verify the selected model and Platform account access.",
+    ],
+    [
+      400,
+      "Field `session.model` is not allowed for this Codex realtime session",
+      "The GPT-Live model value is not permitted. Choose a supported GPT-Live model in Settings > Talk.",
+    ],
+  ] as const)("maps %s: %s", async (status, body, message) => {
+    await expect(createCall(respond(body, { status }))).rejects.toMatchObject({ message });
   });
 
   it("omits private provider detail from call creation errors", async () => {
-    const model = "gpt-live-test-canary";
     const sensitiveDetail = "sensitive-route sensitive-session sensitive-transcript";
-    const fetchImpl = respond(`provider rejected ${model} ${sensitiveDetail}`, { status: 422 });
-    const promise = createCall(fetchImpl, { model });
-
-    await expect(promise).rejects.toMatchObject({
+    await expect(
+      createCall(
+        respond(`provider rejected gpt-live-test-canary ${sensitiveDetail}`, { status: 422 }),
+      ),
+    ).rejects.toMatchObject({
       message: "GPT-Live call creation failed (422)",
     });
   });
@@ -110,9 +103,11 @@ describe("Realtime call creation", () => {
       text: `provider diagnostic: ${"x".repeat(1024)}`,
       headers: { "Content-Type": "text/plain" },
     });
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(streamed.response);
-
-    await expect(createCall(fetchImpl, { model: "gpt-realtime-2.1" })).rejects.toMatchObject({
+    await expect(
+      createCall(vi.fn<typeof fetch>().mockResolvedValue(streamed.response), {
+        model: "gpt-realtime-2.1",
+      }),
+    ).rejects.toMatchObject({
       message: "OpenAI Realtime call creation failed (429)",
     });
     expect(streamed.wasCanceled()).toBe(true);
@@ -125,10 +120,7 @@ describe("Realtime call creation", () => {
   ])("falls back to openai-session-id for Location $location", async ({ location, callId }) => {
     const fetchImpl = respond("v=answer\r\n", {
       status: 201,
-      headers: {
-        Location: location,
-        "openai-session-id": callId,
-      },
+      headers: { Location: location, "openai-session-id": callId },
     });
 
     await expect(createCall(fetchImpl, { oauth: true })).resolves.toMatchObject({ callId });

@@ -6,11 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { createAudioPeer } from "./realtime-quicksilver-gateway.test-support.js";
 import { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 import {
   createCallResponse,
-  createRequest,
-  createResponseHarness,
+  postOffer,
+  reserveLiveSession,
 } from "./realtime-quicksilver.test-helpers.js";
 
 const closers: Array<() => Promise<void> | void> = [];
@@ -26,78 +27,59 @@ afterEach(async () => {
   }
 });
 
-// Gateway-isolate sockets get no agent of their own: they rely on the managed
-// proxy hooks below, which Bun's built-in adapter for a bare `ws` import skips.
-// The realtime voice bridge runs against the real hooks in
-// src/infra/net/proxy/managed-proxy-openai-realtime.test.ts; these sideband paths
-// are not on the plugin's public surface.
+// These sidebands need the Gateway-isolate proxy hooks, unlike a bare `ws` import.
+// Real hooks: src/infra/net/proxy/managed-proxy-openai-realtime.test.ts.
 describe("OpenAI realtime sidebands under the managed proxy", () => {
-  it("offers the browser session sideband only to the managed proxy", async () => {
-    const proxy = await startRefusingProxy();
-    routeNodeHttpThroughProxy(proxy.url);
-    const realtime = createOpenAIQuicksilverBrowserSessionBroker(
-      {
-        getConfig: () => ({}),
-        logger: { debug: vi.fn(), warn: vi.fn() },
-        fetchImpl: vi.fn(async () => createCallResponse()),
-      },
-      openAIRealtimeHost,
-    );
-    closers.push(() => realtime.cleanup());
-    const reservation = await realtime.broker.createBrowserSession(
-      {
-        providerConfig: {},
-        model: "gpt-live-test-canary",
-        runAgentConsult: vi.fn(async () => ({ text: "Done" })),
-      },
-      { type: "api-key", token: "platform-key" },
-    );
-    if (reservation.transport !== "webrtc") {
-      throw new Error("Expected WebRTC reservation");
-    }
-    const response = createResponseHarness();
+  it.each(["browser", "gateway"])(
+    "offers the %s sideband only to the managed proxy",
+    async (kind) => {
+      const proxy = await startRefusingProxy();
+      routeNodeHttpThroughProxy(proxy.url);
+      if (kind === "browser") {
+        const realtime = createOpenAIQuicksilverBrowserSessionBroker(
+          {
+            getConfig: () => ({}),
+            logger: { debug: vi.fn(), warn: vi.fn() },
+            fetchImpl: vi.fn(async () => createCallResponse()),
+          },
+          openAIRealtimeHost,
+        );
+        closers.push(() => realtime.cleanup());
+        const reservation = await reserveLiveSession(realtime);
+        const response = await postOffer(realtime, { token: reservation.clientSecret });
 
-    await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
+        expect(response.res.statusCode).toBe(502);
+      } else {
+        const bridge = new OpenAIQuicksilverGatewayBridge(
+          {
+            providerConfig: {},
+            model: "gpt-live-test-canary",
+            audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+            onAudio: vi.fn(),
+            onClearAudio: vi.fn(),
+            logger: { debug: vi.fn(), warn: vi.fn() },
+            runAgentConsult: vi.fn(async () => ({ text: "done" })),
+            resolveAuth: async () => ({
+              type: "oauth",
+              token: "oauth-token",
+              accountId: "account-1",
+            }),
+            createPeer: async () => createAudioPeer(),
+            fetchImpl: vi.fn<typeof fetch>(async () =>
+              createCallResponse("v=answer\r\n", "rtc_bridge"),
+            ),
+          },
+          openAIRealtimeHost,
+        );
+        closers.push(() => bridge.close());
 
-    // A refused tunnel fails the offer; there is no direct sideband retry.
-    expect(response.res.statusCode).toBe(502);
-    expect(proxy.connects.length).toBeGreaterThan(0);
-    expect(new Set(proxy.connects)).toEqual(new Set(["api.openai.com:443"]));
-  }, 15_000);
-
-  it("offers the gateway relay sideband only to the managed proxy", async () => {
-    const proxy = await startRefusingProxy();
-    routeNodeHttpThroughProxy(proxy.url);
-    const bridge = new OpenAIQuicksilverGatewayBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-test-canary",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
-        logger: { debug: vi.fn(), warn: vi.fn() },
-        runAgentConsult: vi.fn(async () => ({ text: "done" })),
-        resolveAuth: async () => ({ type: "oauth", token: "oauth-token", accountId: "account-1" }),
-        createPeer: vi.fn(async () => ({
-          createOffer: vi.fn(async () => "v=offer\r\n"),
-          applyAnswer: vi.fn(async () => undefined),
-          adoptPendingAudio: vi.fn(),
-          sendAudio: vi.fn(),
-          close: vi.fn(),
-        })),
-        fetchImpl: vi.fn<typeof fetch>(async () =>
-          createCallResponse("v=answer\r\n", "rtc_bridge"),
-        ),
-      },
-      openAIRealtimeHost,
-    );
-    closers.push(() => bridge.close());
-
-    await expect(bridge.connect()).rejects.toThrow();
-
-    expect(proxy.connects.length).toBeGreaterThan(0);
-    expect(new Set(proxy.connects)).toEqual(new Set(["api.openai.com:443"]));
-  }, 15_000);
+        await expect(bridge.connect()).rejects.toThrow();
+      }
+      expect(proxy.connects.length).toBeGreaterThan(0);
+      expect(new Set(proxy.connects)).toEqual(new Set(["api.openai.com:443"]));
+    },
+    15_000,
+  );
 });
 
 // Mirrors the managed proxy's Gateway-isolate hooks: every node:http(s) request
