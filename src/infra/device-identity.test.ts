@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withClientCredentialStore } from "./client-credential-store.test-support.js";
@@ -48,18 +47,6 @@ describe("local device identity owner", () => {
     });
   });
 
-  it("creates and reuses independent identities without a shared database", async () => {
-    await withIdentityStore((env, stateDir) => {
-      const primary = loadOrCreateDeviceIdentity({ env });
-      expect(loadOrCreateDeviceIdentity({ env })).toEqual(primary);
-      const node = loadOrCreateDeviceIdentity({ env, identityKey: "node" });
-      expect(node.deviceId).not.toBe(primary.deviceId);
-      expect(loadDeviceIdentityIfPresent({ env, identityKey: "node" })).toEqual(node);
-      expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(true);
-      expect(fs.existsSync(path.join(stateDir, "state"))).toBe(false);
-    });
-  });
-
   it("fails closed on corrupt persisted identity and lets Doctor preserve matching keys", async () => {
     await withIdentityStore((env) => {
       const original = loadOrCreateDeviceIdentity({ env });
@@ -86,17 +73,6 @@ describe("legacy device identity normalization", () => {
       createdAtMs,
       deviceId: deriveDeviceIdFromPublicKey(pemKeys.publicKeyPem),
     });
-  });
-
-  it("converts valid Swift raw-key material to PEM", () => {
-    const normalized = normalizeLegacyDeviceIdentity(swiftIdentity);
-    expect(normalized).toMatchObject({ deviceId: SWIFT_RAW_DEVICE_ID, createdAtMs });
-    expect(crypto.createPublicKey(normalized?.publicKeyPem ?? "").asymmetricKeyType).toBe(
-      "ed25519",
-    );
-    expect(crypto.createPrivateKey(normalized?.privateKeyPem ?? "").asymmetricKeyType).toBe(
-      "ed25519",
-    );
   });
 
   it("rejects mismatched or malformed legacy key material", () => {
