@@ -55,26 +55,21 @@ it("repairs fractional trace timestamps while captured doctor migration advances
       VALUES (?, 'gateway-supervisor-restart-handoff', 1, ?, 4242, ?, ?, ?,
                 'update.run', ?, ?, 'gateway-update', 'update-process', 'systemd', ?)
     `);
-  insert.run(
-    "expired",
-    "expired-intent",
-    "expired-process",
-    now - 120_000,
-    now - 60_000,
-    now - 130_000 + 0.9,
-    now - 129_000 + 0.4,
-    now,
-  );
-  insert.run(
-    "current",
-    "live-intent",
-    "live-process",
-    now - 1_000,
-    now + 59_000,
-    now - 5_000 + 0.9,
-    now - 1_000 + 0.4,
-    now,
-  );
+  for (const [key, created, expires, started, last] of [
+    ["expired", -120_000, -60_000, -130_000, -129_000],
+    ["current", -1_000, 59_000, -5_000, -1_000],
+  ] as const) {
+    insert.run(
+      key,
+      `${key}-intent`,
+      `${key}-process`,
+      now + created,
+      now + expires,
+      now + started + 0.9,
+      now + last + 0.4,
+      now,
+    );
+  }
   legacy.close();
 
   expect(

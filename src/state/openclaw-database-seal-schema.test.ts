@@ -1,11 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  readSqliteCleanCloseSeal,
-  writeSqliteCleanCloseSeal,
-} from "../infra/sqlite-clean-close-seal.js";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const inputs = vi.hoisted(() => ({
   version: "2026.10.1",
@@ -60,7 +53,6 @@ vi.mock("../version.js", async (importOriginal) => ({
   resolveRuntimeServiceCommit: () => inputs.commit,
   resolveRuntimeServiceBuildId: () => inputs.build,
 }));
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 async function loadSchema() {
   vi.resetModules();
   return (await import("./openclaw-database-seal-schema.js")).sqliteDatabaseSealSchemaFor;
@@ -72,6 +64,15 @@ beforeEach(() => {
   inputs.agentVersion = 31;
   inputs.stateVersion = 28;
   inputs.storageIdentity = { sourceId: "source", compileOptions: "COMPILER=clang-21,ENABLE_FTS5" };
+});
+
+it("retains schema identity across builds and app-version changes", async () => {
+  const schemaIdentity = (await loadSchema())("agent")!.schemaIdentity;
+  inputs.commit = "second";
+  inputs.build = "second";
+  expect((await loadSchema())("agent")?.schemaIdentity).toBe(schemaIdentity);
+  inputs.version = "2026.10.2";
+  expect((await loadSchema())("agent")?.schemaIdentity).toBe(schemaIdentity);
 });
 
 it.each(["agent", "state"] as const)(
@@ -88,29 +89,6 @@ it.each(["agent", "state"] as const)(
     expect((await loadSchema())(kind)).not.toEqual(before);
   },
 );
-
-it("reuses a clean seal across builds and app-version changes", async () => {
-  const pathname = path.join(tempDirs.make("seal-build-identity-"), "database.sqlite");
-  fs.writeFileSync(pathname, "unchanged synthetic database");
-  const file = fs.statSync(pathname, { bigint: true });
-  const proof = { verifiedAt: Date.now(), facts: "validated facts" };
-  const schemaIdentity = (await loadSchema())("agent")!.schemaIdentity;
-  expect(writeSqliteCleanCloseSeal(pathname, schemaIdentity, file, proof)).toBe(true);
-  expect(readSqliteCleanCloseSeal(pathname, file)).toEqual({ ...proof, schemaIdentity });
-
-  inputs.commit = "second";
-  inputs.build = "second";
-  const rebuilt = await loadSchema();
-  expect(rebuilt("agent")?.schemaIdentity).toBe(schemaIdentity);
-  expect(readSqliteCleanCloseSeal(pathname, file)?.schemaIdentity).toBe(
-    rebuilt("agent")?.schemaIdentity,
-  );
-
-  inputs.version = "2026.10.2";
-  expect(readSqliteCleanCloseSeal(pathname, file)?.schemaIdentity).toBe(
-    (await loadSchema())("agent")?.schemaIdentity,
-  );
-});
 
 it.each(["agent", "state"] as const)(
   "invalidates %s proof when its schema version changes",

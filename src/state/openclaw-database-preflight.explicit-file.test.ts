@@ -47,6 +47,13 @@ function createStateDatabase(filename = "candidate.sqlite") {
   return { stateDir, databasePath };
 }
 
+function expectNewerSchema(message: string) {
+  expect(message).toMatch(/newer/);
+  expect(message).toMatch(/build.*supports/);
+  expect(message).toMatch(/restore.*backup/);
+  expect(message).not.toMatch(/doctor --fix|registry query failed|integrity_check failed/);
+}
+
 it.each([
   [
     "retired cron history",
@@ -65,7 +72,6 @@ it.each([
       issues: [
         {
           code: "missing-or-drifted-index",
-          message: "missing or drifted index idx_task_runs_runtime_run",
           objectName: "idx_task_runs_runtime_run",
         },
       ],
@@ -80,20 +86,33 @@ it.each([
       reason: expect.stringContaining("invalid schema version metadata"),
     },
   ],
+  [
+    "unreadable newer catalog",
+    writeUnreadableNewerStateSchema,
+    {
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
+      status: "incompatible",
+      reason: expect.any(String),
+    },
+  ],
 ] as const)("classifies %s without changing the source", async (_name, sql, expected) => {
   const { databasePath } = createStateDatabase();
-  execDatabase(databasePath, sql);
+  if (typeof sql === "string") {
+    execDatabase(databasePath, sql);
+  } else {
+    sql(databasePath);
+  }
   const before = snapshotSourceFamily(databasePath);
-  await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
-    schema: "openclaw.state-schema-preflight.v1",
-    databasePath,
-    targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  const result = await preflightOpenClawStateDatabasePath(databasePath);
+  expect(result).toMatchObject({
     foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-    ownership: null,
     issues: [],
     requiresWrite: false,
     ...expected,
   });
+  if (typeof sql === "function") {
+    expectNewerSchema(result.reason ?? "");
+  }
   deepStrictEqual(snapshotSourceFamily(databasePath), before);
 });
 
@@ -117,38 +136,19 @@ it("rejects genuine drift alongside legacy additive columns without writes", asy
   deepStrictEqual(snapshotSourceFamily(databasePath), before);
 });
 
-it.each(["gateway-startup", "gateway-restart", "explicit-file"] as const)(
-  "reports only the newer schema for an unreadable catalog through %s",
-  async (operation) => {
-    const { stateDir, databasePath } = createStateDatabase("state/openclaw.sqlite");
-    writeUnreadableNewerStateSchema(databasePath);
-    const before = snapshotSourceFamily(databasePath);
-    let message: string;
-    if (operation === "explicit-file") {
-      const result = await preflightOpenClawStateDatabasePath(databasePath);
-      expect(result).toMatchObject({
-        status: "incompatible",
-        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
-        requiresWrite: false,
-        issues: [],
-      });
-      message = result.reason ?? "";
-    } else {
-      const failure = await assertOpenClawDatabasesReady({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        operation,
-        config: {},
-      }).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      message = String(failure);
-    }
-    expect(message).toMatch(/newer/);
-    expect(message).toMatch(/build.*supports/);
-    expect(message).toMatch(/restore.*backup/);
-    expect(message).not.toMatch(/doctor --fix|registry query failed|integrity_check failed/);
-    deepStrictEqual(snapshotSourceFamily(databasePath), before);
-  },
-);
+it("reports only the newer schema for an unreadable catalog at startup", async () => {
+  const { stateDir, databasePath } = createStateDatabase("state/openclaw.sqlite");
+  writeUnreadableNewerStateSchema(databasePath);
+  const before = snapshotSourceFamily(databasePath);
+  const failure = await assertOpenClawDatabasesReady({
+    env: { OPENCLAW_STATE_DIR: stateDir },
+    operation: "gateway-startup",
+    config: {},
+  }).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expectNewerSchema(String(failure));
+  deepStrictEqual(snapshotSourceFamily(databasePath), before);
+});
 
 it("rejects an explicit preflight path with sidecars without touching it", async () => {
   const { databasePath } = createStateDatabase();

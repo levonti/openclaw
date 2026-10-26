@@ -58,13 +58,9 @@ export async function expectNoMainThreadSql(operation: () => Promise<void>) {
 }
 
 export async function expectNoWorkerRequests(operation: () => Promise<void>) {
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    await operation();
-    expect(requests).not.toHaveBeenCalled();
-  } finally {
-    requests.mockRestore();
-  }
+  using requests = vi.spyOn(Worker.prototype, "postMessage");
+  await operation();
+  expect(requests).not.toHaveBeenCalled();
 }
 
 const heldReplies = new Set<() => void>();
