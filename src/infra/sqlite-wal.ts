@@ -326,6 +326,7 @@ export function configureSqliteWalMaintenance(
       ? fs.realpathSync.native(options.databasePath)
       : undefined;
   let invalidated = false;
+  let inspectingSidecars = false;
   let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
   const checkpointOwner = createSqliteWalCheckpoint(
     db,
@@ -335,7 +336,7 @@ export function configureSqliteWalMaintenance(
   const runCheckpoint = checkpointOwner.checkpoint;
 
   const runMaintenance = (operation: () => boolean): boolean => {
-    if (invalidated) {
+    if (invalidated || inspectingSidecars) {
       return false;
     }
     try {
@@ -471,6 +472,7 @@ export function configureSqliteWalMaintenance(
       timerIntervalMs > 0 &&
       !scope.signal.aborted &&
       !invalidated &&
+      !inspectingSidecars &&
       !options.isScheduledMaintenanceSuspended?.()
         ? { maxPages, checkpointMode: periodicCheckpointMode, checkpoint: checkpointOwner.snapshot }
         : undefined,
@@ -496,21 +498,27 @@ export function configureSqliteWalMaintenance(
     schedule("periodic", timerIntervalMs, async () => {
       // Inspect the published handle before identity admission or synchronous cleanup.
       if (tripwireDatabasePath && splitBrainDetectionEnabled) {
-        let splitBrain: SqliteWalSplitBrainEvent | undefined;
+        // Other due ticks and explicit maintenance must not overtake containment.
+        inspectingSidecars = true;
         try {
-          splitBrain = await detectSqliteWalSplitBrain(tripwireDatabasePath);
-        } catch (error) {
-          splitBrainDetectionEnabled = false;
-          log.warn("SQLite WAL split-brain detection disabled", {
-            databaseLabel: options.databaseLabel,
-            databasePath: tripwireDatabasePath,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        if (splitBrain) {
-          invalidated = true;
-          scope.beginClose();
-          terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+          let splitBrain: SqliteWalSplitBrainEvent | undefined;
+          try {
+            splitBrain = await detectSqliteWalSplitBrain(tripwireDatabasePath);
+          } catch (error) {
+            splitBrainDetectionEnabled = false;
+            log.warn("SQLite WAL split-brain detection disabled", {
+              databaseLabel: options.databaseLabel,
+              databasePath: tripwireDatabasePath,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          if (splitBrain) {
+            invalidated = true;
+            scope.beginClose();
+            terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+          }
+        } finally {
+          inspectingSidecars = false;
         }
         if (scope.signal.aborted) {
           return;

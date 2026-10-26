@@ -383,6 +383,58 @@ describe("sqlite WAL maintenance", () => {
         await closing;
       }
       expect(execute).toHaveBeenCalledTimes(retire ? 0 : 1);
+      if (!retire) {
+        expect(execute).toHaveBeenCalledWith(expect.objectContaining({ maxPages: 512 }));
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "holds checkpoint ticks and explicit maintenance behind sidecar inspection (tracked: %s)",
+    async (tracked) => {
+      const clock = sqliteSchedulerClock();
+      const databasePath = resources.file();
+      const db = resources.open(databasePath, {}, tracked);
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
+      const maintenance = resources.maintain(db, { databasePath, checkpointIntervalMs: 60_000 });
+      db.exec("CREATE TABLE entries (value TEXT);");
+      await clock.advanceBy(50_000);
+      db.prepare("INSERT INTO entries VALUES ('pending');").run();
+      const prepare = vi.spyOn(db, "prepare");
+      const close = vi.spyOn(db, "close");
+      const inspecting = createDeferredCore();
+      const inspected = createDeferredCore<fs.BigIntStats>();
+      const sidecarPath = `${databasePath}-wal`;
+      vi.spyOn(directoryFs, "readdir").mockResolvedValue(["42"]);
+      vi.spyOn(fs.promises, "readlink").mockResolvedValue(sidecarPath);
+      vi.spyOn(fs, "fstat").mockImplementation((_fd, _options, callback) =>
+        callback(null, { dev: 10n, ino: 20n, nlink: 1n } as fs.BigIntStats),
+      );
+      vi.spyOn(fs.promises, "stat").mockImplementation(async () => {
+        inspecting.resolve();
+        return inspected.promise;
+      });
+      vi.spyOn(fs, "writeSync").mockReturnValue(1);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      vi.spyOn(process, "abort").mockImplementation(() => {
+        throw new Error("process abort intercepted");
+      });
+      const running = clock.advanceBy(10_000);
+      try {
+        await inspecting.promise;
+        expect(prepare).not.toHaveBeenCalled();
+        expect(maintenance.checkpoint()).toBe(false);
+        expect(() => maintenance.reclaimFreePages()).toThrow("owner is unavailable");
+        expect(maintenance.close()).toBe(false);
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        inspected.resolve({ dev: 10n, ino: 21n } as fs.BigIntStats);
+        await running;
+      }
+      expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
+      expect(prepare).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
     },
   );
 
