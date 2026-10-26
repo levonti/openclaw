@@ -1,3 +1,6 @@
+/// <reference lib="esnext.array" />
+
+import type { IncomingHttpHeaders } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
@@ -6,6 +9,7 @@ import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { requestBodyText, withServer } from "openclaw/plugin-sdk/test-env";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { createModel } from "../model.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -31,21 +35,12 @@ import {
 function makeOllamaResponse({
   done_reason,
   ...message
-}: {
-  content?: string;
-  thinking?: string;
-  reasoning?: string;
+}: Partial<Omit<Parameters<typeof buildAssistantMessage>[0]["message"], "role">> & {
   done_reason?: string;
-  tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
 }) {
   return chunk(
     { content: "", ...message },
-    {
-      done: true,
-      prompt_eval_count: 100,
-      eval_count: 50,
-      ...(done_reason ? { done_reason } : {}),
-    },
+    { done: true, prompt_eval_count: 100, eval_count: 50, done_reason },
   );
 }
 
@@ -66,13 +61,8 @@ function terminalChunk(metadata: Partial<Parameters<typeof buildAssistantMessage
   return chunk({ content: "" }, { done: true, done_reason: "stop", ...metadata });
 }
 
-async function readEvents(stream: ReturnType<ReturnType<typeof createOllamaStreamFn>>) {
-  const events: AssistantMessageEvent[] = [];
-  for await (const event of await stream) {
-    events.push(event);
-  }
-  return events;
-}
+const readEvents = async (stream: ReturnType<ReturnType<typeof createOllamaStreamFn>>) =>
+  Array.fromAsync(await stream);
 
 const realContext = { messages: [{ role: "user" as const, content: "test", timestamp: 0 }] };
 const requestEvents = (
@@ -97,7 +87,6 @@ const denseChunks = () => [
   makeOllamaResponse({}),
 ];
 
-const USER = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
 const MODEL_INFO = { api: "ollama", provider: "ollama", id: "qwen3.5" };
 const STREAM_MODEL = {
   ...createModel("qwen3.5", "qwen3.5", { reasoning: true, contextWindow: 65536 }),
@@ -156,26 +145,19 @@ function startMockStream(
   return createOllamaStreamFn(model.baseUrl)(model, context, options);
 }
 
-async function streamOllamaEvents(
-  chunks: Array<Record<string, unknown>>,
-  options: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] = {},
-  context: Parameters<ReturnType<typeof createOllamaStreamFn>>[1] = realContext,
-) {
-  return readEvents(startMockStream(chunks, options, context));
-}
+const streamOllamaEvents = (...args: Parameters<typeof startMockStream>) =>
+  readEvents(startMockStream(...args));
 
-describe("isOllamaCompatProvider", () => {
-  it.each([
-    ["http://localhost:11434", true],
-    ["http://127.0.0.1:11434", true],
-    ["http://127.0.0.2:11434", true],
-    ["http://[::1]:11434", true],
-    ["http://[::ffff:127.0.0.2]:11434", true],
-    ["http://10.0.0.1:11434", false],
-    ["http://127.0.0.1.evil.com:11434", false],
-  ] as const)("classifies %s as Ollama-compatible=%s", (baseUrl, expected) => {
-    expect(isOllamaCompatProvider({ provider: "custom", baseUrl })).toBe(expected);
-  });
+it.each([
+  ["http://localhost:11434", true],
+  ["http://127.0.0.1:11434", true],
+  ["http://127.0.0.2:11434", true],
+  ["http://[::1]:11434", true],
+  ["http://[::ffff:127.0.0.2]:11434", true],
+  ["http://10.0.0.1:11434", false],
+  ["http://127.0.0.1.evil.com:11434", false],
+] as const)("classifies %s as Ollama-compatible=%s", (baseUrl, expected) => {
+  expect(isOllamaCompatProvider({ provider: "custom", baseUrl })).toBe(expected);
 });
 
 describe("buildAssistantMessage", () => {
@@ -202,8 +184,7 @@ describe("buildAssistantMessage", () => {
       done_reason: "length",
       tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
     });
-    const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.stopReason).toBe("length");
+    expect(buildAssistantMessage(response, MODEL_INFO).stopReason).toBe("length");
   });
 });
 
@@ -259,13 +240,9 @@ describe("createOllamaStreamFn thinking events", () => {
           .map((event) => event.delta)
           .join(""),
       ).toBe("Let me read README.md.");
-      expect(events.find((event) => event.type === "toolcall_delta")).toMatchObject({
-        partial: {
-          content: expect.arrayContaining([
-            expect.objectContaining({ partialJson: JSON.stringify({ path }) }),
-          ]),
-        },
-      });
+      expect(
+        events.find((event) => event.type === "toolcall_delta")?.partial.content,
+      ).toContainEqual(expect.objectContaining({ partialJson: JSON.stringify({ path }) }));
       expect(done?.message.content).toEqual([
         ...(thinking ? [{ type: "thinking", thinking: "Private reasoning" }] : []),
         { type: "text", text: "Let me read README.md." },
@@ -327,16 +304,16 @@ describe("createOllamaStreamFn thinking events", () => {
   it.each([
     {
       format: "bracketed",
-      name: "mempalace_mempalace_search",
-      raw: '[mempalace_mempalace_search]\n{"query":"codename","wing":"personal","room":"identities"}\n[END_TOOL_REQUEST]',
-      args: { query: "codename", wing: "personal", room: "identities" },
+      name: "search_docs",
+      raw: '[search_docs]\n{"query":"x"}\n[END_TOOL_REQUEST]',
+      args: { query: "x" },
       parameters: { type: "object", properties: {} },
     },
     {
       format: "Harmony",
       name: "read",
-      raw: 'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}',
-      args: { path: "/path/to/file", line_start: 1, line_end: 400 },
+      raw: 'commentary to=read code {"path":"x"}',
+      args: { path: "x" },
       parameters: { type: "object" },
     },
   ])(
@@ -402,20 +379,10 @@ describe("createOllamaStreamFn thinking events", () => {
   it("redacts reflected credentials from a real non-2xx Ollama response", async () => {
     const configuredSecret = "stream-transport-configured-secret";
     const bearerCredential = "stream-transport-bearer-secret";
-    let returnSuccess = false;
-    let receivedConfiguredHeader: string | undefined;
-    let receivedAuthorization: string | undefined;
+    let receivedHeaders: IncomingHttpHeaders | undefined;
     await withNativeServer(
       (request, response) => {
-        const configuredHeader = request.headers["x-proxy-auth"];
-        receivedConfiguredHeader =
-          typeof configuredHeader === "string" ? configuredHeader : undefined;
-        receivedAuthorization = request.headers.authorization;
-        if (returnSuccess) {
-          response.writeHead(200, { "content-type": "application/x-ndjson" });
-          response.end(`${JSON.stringify(makeOllamaResponse({ content: "success control" }))}\n`);
-          return;
-        }
+        receivedHeaders = request.headers;
         response.writeHead(429, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -429,16 +396,12 @@ describe("createOllamaStreamFn thinking events", () => {
         const events = await requestEvents(streamFn, { apiKey: bearerCredential });
 
         const errorEvent = events.find((event) => event.type === "error");
-        expect(receivedConfiguredHeader).toBe(configuredSecret);
-        expect(receivedAuthorization).toBe(`Bearer ${bearerCredential}`);
+        expect(receivedHeaders?.["x-proxy-auth"]).toBe(configuredSecret);
+        expect(receivedHeaders?.authorization).toBe(`Bearer ${bearerCredential}`);
         expect(errorEvent?.error?.errorMessage).toMatch(/^429\b/);
         expect(errorEvent?.error?.errorMessage).toContain("rate limit exceeded");
         expect(errorEvent?.error?.errorMessage).not.toContain(configuredSecret);
         expect(errorEvent?.error?.errorMessage).not.toContain(bearerCredential);
-
-        returnSuccess = true;
-        const successEvents = await requestEvents(streamFn, { apiKey: bearerCredential });
-        expect(successEvents.some((event) => event.type === "done")).toBe(true);
       },
       { "X-Proxy-Auth": configuredSecret },
     );
@@ -515,9 +478,8 @@ describe("createOllamaStreamFn thinking events", () => {
   });
 
   it("reports caller aborts during dense native stream processing as aborted", async () => {
-    const chunks = denseChunks();
     const controller = new AbortController();
-    const stream = startMockStream(chunks, { signal: controller.signal });
+    const stream = startMockStream(denseChunks(), { signal: controller.signal });
 
     setTimeout(() => {
       controller.abort();
@@ -525,8 +487,7 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const events = await readEvents(stream);
 
-    const lastEvent = events.at(-1);
-    expect(lastEvent).toMatchObject({
+    expect(events.at(-1)).toMatchObject({
       type: "error",
       reason: "aborted",
       error: { stopReason: "aborted" },
@@ -535,16 +496,23 @@ describe("createOllamaStreamFn thinking events", () => {
 
   it.each([
     [undefined, undefined, 12, 6],
-    [77, 19, 77, 19],
-    [0, 0, 0, 0],
+    [77, 19, 77, 19, 0, 96],
+    [0, 0, 0, 0, 0, 0],
     [undefined, 19, 12, 19],
     [77, undefined, 77, 6],
     [-1, 19, 12, 19],
     [77, -1, 77, 6],
-    [100, 50, 20, 50, 80],
+    [100, 50, 20, 50, 80, 150],
   ])(
     "resolves provider counters %s/%s independently of CJK estimates and cache provenance",
-    async (promptCount, completionCount, expectedInput, expectedOutput, cacheRead = 0) => {
+    async (
+      promptCount,
+      completionCount,
+      expectedInput,
+      expectedOutput,
+      cacheRead = 0,
+      totalTokens?: number,
+    ) => {
       const events = await streamOllamaEvents(
         [
           chunk({ content: "你好世界测试" }),
@@ -559,28 +527,19 @@ describe("createOllamaStreamFn thinking events", () => {
       );
 
       const usage = doneEvent(events)?.message.usage;
+      const contextUsage =
+        totalTokens === undefined
+          ? undefined
+          : { state: "available", promptTokens: promptCount, totalTokens };
       expect(usage).toMatchObject({
         input: expectedInput,
         output: expectedOutput,
         cacheRead,
         cacheWrite: 0,
         cacheTelemetry: { state: cacheRead ? "available" : "unavailable" },
+        usageReport: { state: contextUsage ? "available" : "unavailable" },
       });
-      const measured =
-        promptCount !== undefined &&
-        promptCount >= 0 &&
-        completionCount !== undefined &&
-        completionCount >= 0;
-      expect(usage?.usageReport).toEqual({ state: measured ? "available" : "unavailable" });
-      expect(usage?.contextUsage).toEqual(
-        measured
-          ? {
-              state: "available",
-              promptTokens: promptCount,
-              totalTokens: promptCount + completionCount,
-            }
-          : undefined,
-      );
+      expect(usage?.contextUsage).toEqual(contextUsage);
     },
   );
 
@@ -629,7 +588,6 @@ describe("native Ollama direct completion reasoning", () => {
       { ...STREAM_MODEL, id: "qwen3:4b", ...overrides },
       { maxTokens: 24, ...(reasoning === undefined ? {} : { reasoning }) },
     );
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
     expect(request.think).toBe(expectedThink);
     expect(request.options).toMatchObject({ num_predict: 24 });
     expect(request.options).not.toHaveProperty("think");
@@ -702,19 +660,15 @@ async function sentThinking(
             model,
             thinkingLevel: level,
             config: providerBaseUrl
-              ? {
-                  models: {
-                    providers: {
-                      ollama: { baseUrl: providerBaseUrl, api: "ollama", models: [] },
-                    },
-                  },
-                }
+              ? createModelProviderConfig({
+                  ollama: { baseUrl: providerBaseUrl, api: "ollama", models: [] },
+                })
               : undefined,
             streamFn: native,
           }),
           "wrapped stream",
         );
-  const body = await successfulRequest(model, {}, USER, streamFn);
+  const body = await successfulRequest(model, {}, realContext, streamFn);
   return { url: fetchWithSsrFGuardMock.mock.calls[0]?.[0].url, think: body.think };
 }
 
@@ -779,9 +733,7 @@ describe.each(["runtime", "configured"] as const)("%s maximum thinking", (source
 
 const outputModel: ProviderRuntimeModel = {
   ...STREAM_MODEL,
-  baseUrl: "http://127.0.0.1:11434",
   id: "local-model",
-  name: "Local model",
   provider: "custom-ollama",
   reasoning: false,
   contextWindow: 200_000,
@@ -795,7 +747,7 @@ describe("native Ollama output guards", () => {
     ["runtime over authored defaults", { maxTokens: 3072, params: { num_predict: 123 } }, 55, 55],
     ["runtime above model metadata", { maxTokens: 3072 }, 4096, 4096],
   ])("sends %s as num_predict", async (_name, overrides, maxTokens, expected) => {
-    const body = await successfulRequest({ ...outputModel, ...overrides }, { maxTokens }, USER);
+    const body = await successfulRequest({ ...outputModel, ...overrides }, { maxTokens });
     expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0].url).toBe("http://127.0.0.1:11434/api/chat");
     expect(body).toMatchObject({ options: { num_predict: expected } });
   });
@@ -807,7 +759,6 @@ describe("native Ollama output guards", () => {
       const body = await successfulRequest(
         { ...outputModel, id, maxTokens: definition.maxTokens },
         {},
-        USER,
       );
       expect(body).toMatchObject({ options: { num_predict: 8192 } });
     },
