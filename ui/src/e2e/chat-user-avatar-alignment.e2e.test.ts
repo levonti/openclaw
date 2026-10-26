@@ -71,9 +71,11 @@ suite.define(() => {
           new URL("/api/users/riley/avatar?v=1", suite.server.baseUrl).href,
         );
         expect(await slot.getAttribute("data-avatar-state")).toBe("loaded");
+        expect(await slot.ariaSnapshot()).toBe('- img "Riley"');
         await expect.poll(() => requests.length).toBeGreaterThan(0);
         await Promise.all(requests.map((route) => route.fulfill({ response: image })));
         await portrait.evaluate((element: HTMLImageElement) => element.decode());
+        expect(await slot.ariaSnapshot()).toBe('- img "Riley"');
         expect(
           await slot.evaluate((element) => ({
             attributes: element
@@ -137,6 +139,7 @@ suite.define(() => {
       const bounds = await fallback.boundingBox();
       expect(bounds?.width).toBe(loading.width);
       expect(bounds?.height).toBe(loading.height);
+      expect(await slot.ariaSnapshot()).toBe('- img "Riley"');
     });
   });
 
