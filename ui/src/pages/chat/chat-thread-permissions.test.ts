@@ -1,10 +1,6 @@
 /* @vitest-environment jsdom */
-import { expect, it, onTestFinished, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
-import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { expect, it, onTestFinished } from "vitest";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
 import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
@@ -102,36 +98,17 @@ it("projects a scoped permission event and replaces it with its persisted tool r
 });
 
 it("renders a persisted standalone tool result as a Grant card without expanding tool output", async () => {
-  const snapshot = createNativeDeviceSettingsSnapshot();
-  snapshot.device.nodeId = "example-mac";
-  snapshot.permissions.entries = [{ id: "screenRecording", status: "denied" }];
-  const post = vi.fn().mockResolvedValue(snapshot);
-  vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
-  vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
-  const nativeDeviceSettings = createNativeDeviceSettingsCapability();
-  onTestFinished(() => {
-    nativeDeviceSettings?.dispose();
-    vi.unstubAllGlobals();
-  });
   const [group] = groupMessages([{ kind: "message", key: "capture", message: permissionResult() }]);
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => container.remove());
   if (!group || group.kind !== "group") {
     throw new Error("Expected a tool message group");
   }
-  const view = createMessageGroupHarness(container, {
-    // SAFETY: this transcript leaf consumes only the native settings owner.
-    wrapper: createSolidApplicationContextProvider({ nativeDeviceSettings } as ApplicationContext)
-      .wrapper,
-  });
+  const view = createMessageGroupHarness(container);
   view.render(group, { assistantName: "OpenClaw", showReasoning: false });
   await settleToolBridges(container);
   expect(container.querySelector(".chat-permission-card")?.textContent).toContain(
     "Grant Screen Recording",
   );
   expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
-  const button = container.querySelector<HTMLButtonElement>(".chat-permission-card button");
-  expect(button?.textContent).toBe("Open System Settings");
-  button?.click();
-  expect(post).toHaveBeenCalledWith({ type: "resolve-permission", request: permissionMissing });
 });

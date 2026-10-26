@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { stubManualIntersectionObserver } from "./components/chat-media-observer.test-support.ts";
 import {
   hydrateLinkFavicons,
   releaseLinkFavicons,
@@ -15,42 +16,7 @@ afterEach(() => {
 
 it("defers offscreen links and releases their shared URL after the last image leaves", async () => {
   const enter = new Map<Element, () => void>();
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class implements IntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "240px 0px";
-      readonly scrollMargin = "0px";
-      readonly thresholds = [0];
-      constructor(private callback: IntersectionObserverCallback) {}
-      observe(element: Element) {
-        enter.set(element, () => {
-          const rect = element.getBoundingClientRect();
-          this.callback(
-            [
-              {
-                target: element,
-                isIntersecting: true,
-                intersectionRatio: 1,
-                boundingClientRect: rect,
-                intersectionRect: rect,
-                rootBounds: rect,
-                time: 0,
-              },
-            ],
-            this,
-          );
-        });
-      }
-      unobserve(element: Element) {
-        enter.delete(element);
-      }
-      disconnect() {}
-      takeRecords() {
-        return [];
-      }
-    },
-  );
+  stubManualIntersectionObserver((element, notify) => enter.set(element, () => notify(true)));
   const first = appendPlaceholder();
   const second = appendPlaceholder();
   const fetcher = vi.fn().mockResolvedValue("blob:visible-favicon");

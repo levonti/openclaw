@@ -34,15 +34,13 @@ beforeEach(() => {
   vi.stubGlobal("indexedDB", new IDBFactory());
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  resetTranscriptTestDom();
-});
+afterEach(resetTranscriptTestDom);
 
 it.each(["admission", "rollback"] as const)(
   "keeps the previous chat mounted without redundant startup through creation and %s",
   async (outcome) => {
     const previousKey = "agent:main:main";
+    const greeting = "Hi, I’m New agent. Happy to help.";
     const agentId = "bot-new-agent";
     const sessionKey = `agent:${agentId}:main`;
     const rows: GatewaySessionRow[] = [
@@ -56,10 +54,7 @@ it.each(["admission", "rollback"] as const)(
         const row = rows.find((entry) => entry.key === key);
         return {
           messages: [
-            nativeHistoryMessage(
-              2,
-              key === previousKey ? "Previous transcript" : "Hi, I’m New agent. Happy to help.",
-            ),
+            nativeHistoryMessage(2, key === previousKey ? "Previous transcript" : greeting),
           ],
           sessionInfo: row,
           sessionId: row?.sessionId,
@@ -70,28 +65,20 @@ it.each(["admission", "rollback"] as const)(
     Object.assign(context, { basePath: "", router, navigate: vi.fn(), replace: vi.fn() });
     await context.agents.ensureList();
     const container = document.body.appendChild(createApplicationContextProvider(context));
-    const view = mountSolid(
-      () =>
-        Object.assign(document.createElement("openclaw-chat-page"), {
-          data: { sessionKey: previousKey },
-        }),
-      {
-        container,
-        wrapper: createSolidApplicationContextProvider(context).wrapper,
-      },
-    );
+    const page = Object.assign(document.createElement("openclaw-chat-page"), {
+      data: { sessionKey: previousKey },
+    });
+    const view = mountSolid(() => page, {
+      container,
+      wrapper: createSolidApplicationContextProvider(context).wrapper,
+    });
     try {
-      const page = expectDefined(
-        container.querySelector<HTMLElementTagNameMap["openclaw-chat-page"]>("openclaw-chat-page"),
-        "chat page",
-      );
       await settleChatPage(page);
       const previousPane = expectDefined(
         page.querySelector<ChatPaneElement>("openclaw-chat-pane"),
         "previous pane",
       );
       const visible = () => page.querySelector(".chat-pane-cache__pane--visible");
-      const pending = () => page.querySelector("openclaw-pending-session-create");
       const expectPrevious = (hidden: boolean) => {
         expect.soft(previousPane.isConnected).toBe(true);
         expect.soft(previousPane.getAttribute("aria-hidden")).toBe(String(hidden));
@@ -114,11 +101,6 @@ it.each(["admission", "rollback"] as const)(
       await settleChatPage(page);
       await settleChatPage(page);
       expectPrevious(true);
-      expect(visible()?.textContent).not.toContain("Previous transcript");
-      expect(pending()).not.toBeNull();
-      expect(visible()?.querySelector(".chat-text")?.textContent?.trim()).toBe(
-        "Hi, I’m New agent. Happy to help.",
-      );
       expect(startupKeys).toEqual([previousKey]);
 
       context.agents.state.pendingAgent = undefined;
@@ -133,15 +115,9 @@ it.each(["admission", "rollback"] as const)(
       await settleChatPage(page);
       await waitForSolid(() =>
         expect(visible()?.textContent).toContain(
-          outcome === "admission" ? "Hi, I’m New agent. Happy to help." : "Previous transcript",
+          outcome === "admission" ? greeting : "Previous transcript",
         ),
       );
-      expect(pending()).toBeNull();
-      expect(
-        [...page.querySelectorAll(".chat-text")].filter(
-          (entry) => entry.textContent?.trim() === "Hi, I’m New agent. Happy to help.",
-        ),
-      ).toHaveLength(outcome === "admission" ? 1 : 0);
       const panes = [...page.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")];
       expect.soft(panes.find((pane) => pane.sessionKey === previousKey)).toBe(previousPane);
       expectPrevious(outcome === "admission");

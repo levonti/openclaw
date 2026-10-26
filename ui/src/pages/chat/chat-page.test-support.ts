@@ -4,8 +4,10 @@ import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -70,32 +72,18 @@ export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-c
       },
     },
   };
-  const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
-    snapshot: createApplicationGatewaySnapshot({
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
       client,
       phase: "connected",
       hello,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
     }),
-    connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
-    connectionRevision: 0,
-    eventLog: [],
-    eventLogRevision: 0,
-    loadSelfProfile: async () => null,
-    connect: vi.fn(),
-    defer: () => false,
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    subscribe: (listener) => {
-      snapshotListeners.add(listener);
-      return () => snapshotListeners.delete(listener);
-    },
-    subscribeEventLog: () => () => {},
-    subscribeEvents: () => () => {},
-  };
+  );
+  Object.assign(navigation.context, {
+    gateway: Object.assign(gateway, { setSessionKey: vi.fn() }),
+  });
   Object.assign(navigation.context, {
     sessions: createChatPageSessions(navigation.context.gateway),
   });
