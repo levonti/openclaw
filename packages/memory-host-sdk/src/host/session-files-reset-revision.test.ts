@@ -77,6 +77,19 @@ const exportEntry = async (
   scope: ReturnType<typeof sessionScope>,
   options: BuildSessionEntryOptions = {},
 ) => requireSessionEntry(await buildSessionEntry(scope.sessionKey, { ...scope, ...options }));
+async function createSession(id: string, updatedAt = 1, sessionKey?: string) {
+  const scope = sessionScope(id, sessionKey);
+  await upsertSessionEntryCore(scope, { sessionId: id, updatedAt });
+  return scope;
+}
+function replace(
+  scope: ReturnType<typeof sessionScope>,
+  events: Parameters<typeof replaceEvents>[1],
+) {
+  expect(replaceEvents(scope, events)).toBe(true);
+}
+const ownerMessage = (content: unknown) =>
+  msg("user", content, { __openclaw: { senderIsOwner: true } });
 
 beforeEach(async () => {
   state = await createOpenClawTestState({ prefix: "session-revision-test-", layout: "state-only" });
@@ -88,17 +101,15 @@ afterEach(async () => {
 
 describe("SQLite session snapshots and reset content revision", () => {
   it("keeps batched incremental exports current across sessions, appends and rewrites", async () => {
-    const scope = sessionScope("incremental");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const sibling = sessionScope("sibling");
-    await upsertSessionEntryCore(sibling, { sessionId: sibling.sessionId, updatedAt: 1 });
+    const scope = await createSession("incremental");
+    const sibling = await createSession("sibling");
     await append(sibling, "sibling-question", msg("user", "Sibling preference."));
     const first = {
       type: "message",
       id: "heartbeat",
       message: internalMessage("Poll.", "heartbeat"),
     };
-    expect(replaceEvents(scope, [first])).toBe(true);
+    replace(scope, [first]);
     const fullExport = () =>
       buildSessionEntry(scope.sessionKey, { ...scope, onTranscriptMessage() {} });
     let expectedSibling = "User: Sibling preference.";
@@ -116,23 +127,20 @@ describe("SQLite session snapshots and reset content revision", () => {
     expect(await workerExport()).toEqual(await fullExport());
 
     await append(scope, "heartbeat-answer", msg("assistant", "Heartbeat reply."));
-    await append(
-      scope,
-      "question",
-      msg("user", "New preference.", { __openclaw: { senderIsOwner: true } }),
-    );
+    await append(scope, "question", ownerMessage("New preference."));
     const appended = requireSessionEntry(await workerExport());
     expect(appended).toEqual(await fullExport());
-    expect(appended).toMatchObject({ content: "User: New preference.", lineMap: [3] });
-    expect(appended.lineProvenance[0]?.originClass).toBe("owner");
+    expect(appended).toMatchObject({
+      content: "User: New preference.",
+      lineMap: [3],
+      lineProvenance: [{ originClass: "owner" }],
+    });
     expect(await workerExport()).toEqual(appended);
 
     await append(sibling, "sibling-answer", msg("assistant", "Sibling reply."));
     expectedSibling += "\nAssistant: Sibling reply.";
 
-    expect(
-      replaceEvents(scope, [{ ...first, message: msg("user", "Rewritten preference.") }]),
-    ).toBe(true);
+    replace(scope, [{ ...first, message: msg("user", "Rewritten preference.") }]);
     const rewritten = requireSessionEntry(await workerExport());
     expect(rewritten).toEqual(await fullExport());
     expect(rewritten).toMatchObject({
@@ -144,28 +152,22 @@ describe("SQLite session snapshots and reset content revision", () => {
   it.each(["interactive", "dreaming", "cron"])(
     "preserves SQLite/archive output and callback observations for %s transcripts",
     async (kind) => {
-      const scope = sessionScope("parity");
       const observedAt = Date.parse("2026-07-01T10:00:00.000Z");
+      const scope = await createSession("parity", observedAt);
       const payload = "x".repeat(64_000);
       const thought = { type: "thinking", thinking: payload };
       const messages = [
-        msg("user", "Owner.", { __openclaw: { senderIsOwner: true } }),
+        ownerMessage("Owner."),
         msg("assistant", "Derived.", { __openclaw: { turnTainted: true } }),
         internalMessage("Poll.", "heartbeat"),
         { role: "toolResult", content: "Tool result.", details: payload },
         msg("assistant", [
-          {
-            type: "toolCall",
-            name: "write",
-            arguments: { path: "MEMORY.md", content: "Note." },
-          },
+          { type: "toolCall", name: "write", arguments: { path: "MEMORY.md", content: "Note." } },
         ]),
         msg("assistant", "Heartbeat output."),
         internalMessage("Recall.", "memory_get"),
         msg("assistant", "Recall output."),
-        msg("user", [{ type: "image", source: "photo.jpg" }], {
-          __openclaw: { senderIsOwner: true },
-        }),
+        ownerMessage([{ type: "image", source: "photo.jpg" }]),
         msg("assistant", [{ type: "text", text: "Photo." }]),
         msg("assistant", [thought, { type: "text", text: "" }], {
           timestamp: 1000,
@@ -181,8 +183,7 @@ describe("SQLite session snapshots and reset content revision", () => {
           message,
         })),
       ];
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: observedAt });
-      expect(replaceEvents(scope, records)).toBe(true);
+      replace(scope, records);
       const archivePath = path.join(tmpDir, "parity.jsonl.deleted.2026-07-01T10-00-00.000Z");
       fsSync.writeFileSync(archivePath, records.map((record) => JSON.stringify(record)).join("\n"));
       fsSync.utimesSync(archivePath, observedAt / 1000, observedAt / 1000);
@@ -193,21 +194,15 @@ describe("SQLite session snapshots and reset content revision", () => {
       };
       const sqliteObserver = vi.fn();
       const archiveObserver = vi.fn();
+      const exportOptions = { ...options, updatedAtMs: observedAt };
       const sqlite = await exportEntry(scope, {
-        ...options,
-        updatedAtMs: observedAt,
+        ...exportOptions,
         onTranscriptMessage: sqliteObserver,
       });
       const archive = requireSessionEntry(
-        await buildSessionEntry(archivePath, {
-          ...options,
-          onTranscriptMessage: archiveObserver,
-        }),
+        await buildSessionEntry(archivePath, { ...options, onTranscriptMessage: archiveObserver }),
       );
-      const worker = await exportEntry(scope, {
-        ...options,
-        updatedAtMs: observedAt,
-      });
+      const worker = await exportEntry(scope, exportOptions);
 
       expect(sqlite).toEqual({
         ...archive,
@@ -244,12 +239,11 @@ describe("SQLite session snapshots and reset content revision", () => {
       fallbackEntry: sessionEntry,
       skipMaintenance: true,
     });
-    expect(replaceEvents(scope, [messageEvent("source-text", "user", content)])).toBe(true);
+    replace(scope, [messageEvent("source-text", "user", content)]);
     const worker = await exportEntry(scope);
     const inline = await exportEntry(scope, { parseYieldEveryLines: 1 });
     expect(worker.content).toBe(`User: ${content}`);
-    expect(inline.content).toBe(worker.content);
-    expect(inline.hash).toBe(worker.hash);
+    expect(inline).toMatchObject({ content: worker.content, hash: worker.hash });
   });
 
   it.each([false, true])(
@@ -304,8 +298,7 @@ describe("SQLite session snapshots and reset content revision", () => {
   );
 
   it("finishes the transcript snapshot before callbacks can replace its rows", async () => {
-    const scope = sessionScope("snapshot", "agent:main:snapshot");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const scope = await createSession("snapshot", 1, "agent:main:snapshot");
     const first = messageEvent("first", "user", "first", null);
     const kept = messageEvent("kept", "assistant", "kept", "first");
     const records = [
@@ -314,7 +307,7 @@ describe("SQLite session snapshots and reset content revision", () => {
       kept,
       { type: "reset", id: "reset", parentId: "kept", firstKeptEntryId: "kept" },
     ];
-    expect(replaceEvents(scope, records)).toBe(true);
+    replace(scope, records);
     const before = await exportEntry(scope);
     expect(await readCutoff(scope)).toEqual({ state: "valid", cutoffLine: 3 });
     const parse = JSON.parse;
@@ -325,10 +318,7 @@ describe("SQLite session snapshots and reset content revision", () => {
       return Reflect.apply(parse, JSON, args);
     });
     try {
-      expect(readCutoffInline(scope)).toEqual({
-        state: "valid",
-        cutoffLine: 3,
-      });
+      expect(readCutoffInline(scope)).toEqual({ state: "valid", cutoffLine: 3 });
     } finally {
       payloadGuard.mockRestore();
     }
@@ -338,7 +328,7 @@ describe("SQLite session snapshots and reset content revision", () => {
       onTranscriptMessage: (message) => {
         observed.push(message);
         if (observed.length === 1) {
-          expect(replaceEvents(scope, [first])).toBe(true);
+          replace(scope, [first]);
         }
       },
     });
@@ -357,9 +347,8 @@ describe("SQLite session snapshots and reset content revision", () => {
   });
 
   it("carries the admitted input fence through the reset metadata worker", async () => {
-    const scope = sessionScope("fence");
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    expect(replaceEvents(scope, [messageEvent("admitted", "user", "input", null)])).toBe(true);
+    const scope = await createSession("fence");
+    replace(scope, [messageEvent("admitted", "user", "input", null)]);
     const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
     assert(anchor, "expected persisted input anchor");
     await appendTranscriptEvent(scope, { type: "reset", id: "later-reset", parentId: "admitted" });

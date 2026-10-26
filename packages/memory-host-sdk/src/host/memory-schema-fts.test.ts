@@ -38,12 +38,10 @@ describe("memory index FTS lifecycle", () => {
       DELETE FROM memory_index_chunks WHERE id = 'removed';
       VACUUM;
     `);
-    expect(rows("SELECT chunk_rowid, id FROM memory_index_chunks")).toEqual([
-      { chunk_rowid: 84, id: "kept" },
-    ]);
-    expect(rows("SELECT rowid, id FROM memory_index_chunks_fts")).toEqual([
-      { rowid: 84, id: "kept" },
-    ]);
+    const readIds = (table: string, rowid = "rowid") =>
+      rows(`SELECT ${rowid} AS rowid, id FROM ${table}`);
+    expect(readIds("memory_index_chunks", "chunk_rowid")).toEqual([{ rowid: 84, id: "kept" }]);
+    expect(readIds("memory_index_chunks_fts")).toEqual([{ rowid: 84, id: "kept" }]);
     db.exec(`
       UPDATE memory_index_chunks
       SET chunk_rowid = 103, id = 'renamed', path = 'sessions/renamed.md', source = 'sessions',
@@ -51,21 +49,12 @@ describe("memory index FTS lifecycle", () => {
       WHERE id = 'kept';
     `);
     const expectedRows = [
-      {
-        rowid: 103,
-        id: "renamed",
-        path: "sessions/renamed.md",
-        source: "sessions",
-        model: "new-model",
-        start_line: 5,
-        end_line: 8,
-        text: "replacement body",
-      },
+      [103, "renamed", "sessions/renamed.md", "sessions", "new-model", 5, 8, "replacement body"],
     ];
     const readBodyIndex = () =>
       rows(
         "SELECT rowid, id, path, source, model, start_line, end_line, text FROM memory_index_chunks_fts",
-      );
+      ).map(Object.values);
     expect(readBodyIndex()).toEqual(expectedRows);
     const search = db.prepare(
       "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
@@ -82,34 +71,34 @@ describe("memory index FTS lifecycle", () => {
     expect(search.all("replacement")).toEqual([]);
   });
 
-  it.each([
-    { name: "canonical", ftsTable: undefined },
-    { name: "custom", ftsTable: "chunks_fts" },
-  ])("drops path FTS and its source triggers with $name body FTS disabled", ({ ftsTable }) => {
-    const { rows, ensure, insert } = fixture();
-    insert("before", 1);
-    ensure(false, ftsTable);
-    expect(
-      rows(
-        "SELECT type, name FROM sqlite_master WHERE name IN ('memory_index_paths_fts', 'memory_index_paths_fts_after_insert', 'memory_index_paths_fts_after_update', 'memory_index_paths_fts_after_delete') ORDER BY type, name",
-      ),
-    ).toEqual([]);
-    if (!ftsTable) {
+  it.each([undefined, "chunks_fts"])(
+    "drops path FTS and source triggers with body FTS %s disabled",
+    (ftsTable) => {
+      const { rows, ensure, insert } = fixture();
+      insert("before", 1);
+      ensure(false, ftsTable);
       expect(
         rows(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_chunks_fts'",
+          "SELECT type, name FROM sqlite_master WHERE name IN ('memory_index_paths_fts', 'memory_index_paths_fts_after_insert', 'memory_index_paths_fts_after_update', 'memory_index_paths_fts_after_delete') ORDER BY type, name",
         ),
       ).toEqual([]);
-    }
-    insert("disabled", 2);
-    expect(ensure().ftsAvailable).toBe(true);
-    expect(rows("SELECT path, source FROM memory_index_paths_fts ORDER BY path")).toEqual([
-      { path: "before.md", source: "memory" },
-      { path: "disabled.md", source: "memory" },
-    ]);
-    expect(rows("SELECT id, text FROM memory_index_chunks_fts ORDER BY id")).toEqual([
-      { id: "before", text: "before body" },
-      { id: "disabled", text: "disabled body" },
-    ]);
-  });
+      if (!ftsTable) {
+        expect(
+          rows(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_chunks_fts'",
+          ),
+        ).toEqual([]);
+      }
+      insert("disabled", 2);
+      expect(ensure().ftsAvailable).toBe(true);
+      expect(rows("SELECT path, source FROM memory_index_paths_fts ORDER BY path")).toEqual([
+        { path: "before.md", source: "memory" },
+        { path: "disabled.md", source: "memory" },
+      ]);
+      expect(rows("SELECT id, text FROM memory_index_chunks_fts ORDER BY id")).toEqual([
+        { id: "before", text: "before body" },
+        { id: "disabled", text: "disabled body" },
+      ]);
+    },
+  );
 });

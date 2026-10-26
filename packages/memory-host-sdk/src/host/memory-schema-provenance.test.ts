@@ -53,21 +53,16 @@ describe("memory chunk provenance backfill", () => {
         { source: "sessions", hash: "untouched" },
       ]);
       expectRows("SELECT revision FROM memory_index_state", [{ revision: 1 }]);
-      const untrusted = {
-        origin_class: "untrusted",
-        session_kind: "unknown",
-        supersedes_key: null,
-      };
-      expectRows("SELECT * FROM memory_index_chunk_provenance ORDER BY chunk_id", [
-        { ...untrusted, chunk_id: "missing-1", observed_at: 11 },
-        { ...untrusted, chunk_id: "missing-2", observed_at: 12 },
-        {
-          chunk_id: "owned",
-          origin_class: "owner",
-          session_kind: "interactive",
-          observed_at: 3,
-          supersedes_key: "prior",
-        },
+      expect(
+        db
+          .prepare(`SELECT chunk_id, origin_class, session_kind, observed_at, supersedes_key
+        FROM memory_index_chunk_provenance ORDER BY chunk_id`)
+          .all()
+          .map(Object.values),
+      ).toEqual([
+        ["missing-1", "untrusted", "unknown", 11, null],
+        ["missing-2", "untrusted", "unknown", 12, null],
+        ["owned", "owner", "interactive", 3, "prior"],
       ]);
       ensureMemoryChunkProvenance(db);
       expectRows("SELECT revision FROM memory_index_state", [{ revision: 1 }]);
