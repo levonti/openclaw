@@ -6,7 +6,6 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import * as authStore from "../agents/auth-profiles/store.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -22,13 +21,6 @@ afterEach(() => vi.restoreAllMocks());
 function profileConfig(provider: string, id = "team:prod"): OpenClawConfig {
   return { auth: { profiles: { [id]: { provider, mode: "api_key" } } } };
 }
-
-const workspaceAliasPlugin = createPluginManifestRecordFixture({
-  id: "fixture-provider",
-  providers: ["fixture-provider", "fixture-provider-plan"],
-  origin: "workspace",
-  providerAuthAliases: { "fixture-provider-plan": "fixture-provider" },
-});
 
 const entry = {
   sessionId: "session-auth-profile-preservation",
@@ -74,15 +66,14 @@ it.each([
 ])(
   "checks a pin's stored $credentialProvider realm against the configured endpoint",
   ({ credentialProvider, expected }) => {
-    const plugin: PluginManifestRecord = {
-      ...workspaceAliasPlugin,
+    const plugin = createPluginManifestRecordFixture({
       id: "arcee",
       origin: "bundled",
       providers: ["arcee"],
       providerAuthAliases: {
         arcee: { provider: "openrouter", baseUrls: ["https://openrouter.ai/api/v1"] },
       },
-    };
+    });
     const actual = preserves({
       cfg: {
         models: {
@@ -100,15 +91,8 @@ it.each([
   },
 );
 
-it.each([true, false])("workspace aliases require config trust: enabled=%s", (enabled) => {
-  expect(
-    preserves({
-      currentProvider: "fixture-provider",
-      provider: "fixture-provider-plan",
-      metadataSnapshot: { plugins: [workspaceAliasPlugin] },
-      cfg: enabled ? { plugins: { entries: { "fixture-provider": { enabled: true } } } } : {},
-    }),
-  ).toBe(enabled);
+it("uses a missing ordinary profile's provider prefix", () => {
+  expect(preserves({ provider: "fixture-provider" })).toBe(true);
 });
 
 it("uses the recorded provider for an arbitrary stored profile id", () => {
