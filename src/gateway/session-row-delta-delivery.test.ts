@@ -39,7 +39,12 @@ it("prepares unchanged frozen fields once across row revisions and delivery hist
         if (index === 1 && event === 6) {
           continue;
         }
-        const delivery = owner.prepareDelivery(row, undefined, "publication", diff);
+        const delivery = owner.prepareDelivery(
+          row,
+          undefined,
+          "00000000-0000-4000-8000-000000000001",
+          diff,
+        );
         if (event > 0) {
           const set = {
             runtimeMs: event,
