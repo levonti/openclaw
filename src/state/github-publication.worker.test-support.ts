@@ -62,7 +62,6 @@ export async function expectNoWorkerRequests(operation: () => Promise<void>) {
 }
 
 const heldReplies = new Set<() => void>();
-const { postMessage, emit } = Worker.prototype;
 
 export function releaseHeldGitHubPublicationMessages() {
   for (const release of heldReplies) {
@@ -77,6 +76,9 @@ export function holdNextReply(
   const ready = createDeferredCore();
   let deliver: ((error?: Error) => void) | undefined;
   let target: { worker: Worker; id: number } | undefined;
+  // Restored spies retain native call-through; Reflect.apply supplies each live Worker.
+  const postMessage = vi.spyOn(Worker.prototype, "postMessage");
+  postMessage.mockRestore();
   const posts = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
     this: Worker,
     request: SqliteWorkerRequest,
@@ -97,6 +99,8 @@ export function holdNextReply(
     }
     return Reflect.apply(postMessage, this, [request, ...args]);
   });
+  const emit = vi.spyOn(Worker.prototype, "emit");
+  emit.mockRestore();
   const messages = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
     this: Worker,
     event: string | symbol,
@@ -124,7 +128,12 @@ export function holdNextReply(
     const send = deliver;
     deliver = undefined;
     heldReplies.delete(release);
-    send?.(error);
+    try {
+      send?.(error);
+    } finally {
+      postMessage.mockClear();
+      emit.mockClear();
+    }
   };
   heldReplies.add(release);
   return { ready: ready.promise, release };

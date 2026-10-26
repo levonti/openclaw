@@ -7,6 +7,8 @@ import {
 import { readDaemonRuntimePinMigrationPending } from "../daemon/runtime-pin-state.js";
 import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import {
   closeOpenClawStateDatabaseAsync,
   prepareOpenClawStateDatabaseSchema,

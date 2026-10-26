@@ -467,19 +467,22 @@ it("rejects genuine drift alongside legacy additive columns without writes", asy
   deepStrictEqual(snapshotSourceFamily(databasePath), before);
 });
 
-it("reports only the newer schema for an unreadable catalog at startup", async () => {
-  const { stateDir, databasePath } = createStateDatabase("state/openclaw.sqlite");
-  writeUnreadableNewerStateSchema(databasePath);
-  const before = snapshotSourceFamily(databasePath);
-  const failure = await assertOpenClawDatabasesReady({
-    env: { OPENCLAW_STATE_DIR: stateDir },
-    operation: "gateway-startup",
-    config: {},
-  }).catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(Error);
-  expectNewerSchema(String(failure));
-  deepStrictEqual(snapshotSourceFamily(databasePath), before);
-});
+it.each(["gateway-startup", "gateway-restart"] as const)(
+  "reports only the newer schema for an unreadable catalog at %s",
+  async (operation) => {
+    const { stateDir, databasePath } = createStateDatabase("state/openclaw.sqlite");
+    writeUnreadableNewerStateSchema(databasePath);
+    const before = snapshotSourceFamily(databasePath);
+    const failure = await assertOpenClawDatabasesReady({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      operation,
+      config: {},
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expectNewerSchema(String(failure));
+    deepStrictEqual(snapshotSourceFamily(databasePath), before);
+  },
+);
 
 it("rejects an explicit preflight path with sidecars without touching it", async () => {
   const { databasePath } = createStateDatabase();

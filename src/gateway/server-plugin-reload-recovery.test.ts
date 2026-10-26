@@ -38,11 +38,11 @@ function recoveryFixture(id: string, body: string) {
   return {
     plugin,
     stateDir,
-    capturedRoot() {
+    capturedRoot(this: void) {
       expect(root).toBeDefined();
       return root!;
     },
-    load() {
+    load(this: void) {
       const cache = createPluginCache();
       caches.push(cache);
       return withPluginCache(cache, () =>

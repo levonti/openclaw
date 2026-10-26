@@ -44,6 +44,7 @@ it("loads personal files and quarantines an untrusted tool write", () =>
     });
     const workspaceDir = state.statePath("workspace");
     const profile = ensureProfileForEmail("person@example.test");
+    ensureProfileForEmail("other@example.test");
     const personalFile = path.join(workspaceDir, "users", profile.id, "USER.md");
     await fs.mkdir(path.dirname(personalFile), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");

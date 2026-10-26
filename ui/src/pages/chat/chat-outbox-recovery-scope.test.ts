@@ -25,7 +25,9 @@ function reopen(host: ReturnType<typeof makeChatHost>, connectionEpoch = host.co
 }
 function sendingHost(chatMessage: string, send: (params: unknown) => unknown) {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
     throw new Error("quota");
   });

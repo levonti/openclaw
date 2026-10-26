@@ -82,7 +82,7 @@ beforeEach(async () => {
   for (const [agentId, sessionKey] of [
     ["main", QUEUE_KEY],
     ["research", "global"],
-  ]) {
+  ] as const) {
     writeSessionEntry(openOpenClawAgentDatabase({ agentId, env: state.env }), sessionKey, {
       sessionId: `${agentId}-origin`,
       lifecycleRevision: "original-revision",

@@ -4,8 +4,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 
 const { note, diagnostics } = vi.hoisted(() => ({ note: vi.fn(), diagnostics: vi.fn() }));
-// Only terminal output and filesystem discovery are replaced; roster and budgets are real.
+// mock-isolation: Capture Doctor diagnostics without writing to the operator's terminal.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+// mock-isolation: Supply synthetic bootstrap files without discovering operator workspace files.
 vi.mock("../agents/bootstrap-files-diagnostics.js", () => ({
   resolveBootstrapContextForDiagnostics: diagnostics,
 }));

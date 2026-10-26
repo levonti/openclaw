@@ -335,6 +335,34 @@ describe("createOllamaStreamFn thinking events", () => {
     },
   );
 
+  it("preserves a fenced Ollama text tool call as visible text", async () => {
+    const text = [
+      "```powershell",
+      'exec(command="echo hello", title="Echo command", workdir="C:\\workspace")',
+      "```",
+    ].join("\n");
+    const events = await streamOllamaEvents(
+      [makeOllamaResponse({ content: text })],
+      {},
+      {
+        messages: [{ role: "user", content: "Use exec to run echo hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "exec",
+            description: "Run a command",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+    );
+
+    expectEventTypes(events, "start text_start text_delta text_end done");
+    expect(doneEvent(events)).toMatchObject({
+      reason: "stop",
+      message: { stopReason: "stop", content: [{ type: "text", text }] },
+    });
+  });
+
   it("refreshes the guarded-fetch idle timeout for each streamed Ollama response", async () => {
     const chunks = [
       chunk({ content: "Hello" }),
