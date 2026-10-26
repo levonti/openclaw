@@ -6,8 +6,6 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
@@ -68,10 +66,7 @@ it.each(["admission", "rollback"] as const)(
     const page = Object.assign(document.createElement("openclaw-chat-page"), {
       data: { sessionKey: previousKey },
     });
-    const view = mountSolid(() => page, {
-      container,
-      wrapper: createSolidApplicationContextProvider(context).wrapper,
-    });
+    container.append(page);
     try {
       await settleChatPage(page);
       const previousPane = expectDefined(
@@ -126,7 +121,6 @@ it.each(["admission", "rollback"] as const)(
         outcome === "admission" ? [previousKey, sessionKey] : [previousKey],
       );
     } finally {
-      view.unmount();
       container.remove();
       router.stop();
     }

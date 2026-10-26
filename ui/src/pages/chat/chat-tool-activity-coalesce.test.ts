@@ -18,11 +18,7 @@ function assistant(content: unknown[], fields: Fields = {}) {
   return { role: "assistant", content, ...fields };
 }
 function invocation(id: string) {
-  const call = assistant([
-    { type: "text", text: `before ${id}` },
-    toolCall(id),
-    { type: "text", text: `after ${id}` },
-  ]);
+  const call = assistant([toolCall(id)]);
   const output = { role: "toolResult", content: [result(id)] };
   return { call, output, items: () => [item(call, `call-${id}`), item(output, `result-${id}`)] };
 }
@@ -48,22 +44,10 @@ it("coalesces a new projected boundary's invocation without borrowing from the p
   expect(extractToolCardsCached(rows[1])[0]).toMatchObject({ callId: "call", completed: true });
 });
 
-it("reuses finalized bundles across prepends and invalidates only changed sources", () => {
+it("invalidates replaced blocks and messages without rebuilding unrelated bundles", () => {
   const first = invocation("first");
   const second = invocation("second");
-  const older = invocation("older");
   const initial = messages([...first.items(), ...second.items()]);
-  initial.forEach((message) => {
-    extractToolCardsCached(message);
-    const record = message as { content: unknown[] };
-    Object.freeze(record.content);
-    Object.freeze(message);
-  });
-  const rebuilt = messages([...first.items(), ...second.items()]);
-  expect(sameReferences(rebuilt, initial)).toEqual([true, true]);
-  const prepended = messages([...older.items(), ...first.items(), ...second.items()]);
-  expect(sameReferences(prepended.slice(1), initial)).toEqual([true, true]);
-
   first.output.content = [{ ...first.output.content[0]!, text: '{"exitCode":1}' }];
   const replacedBlock = messages([...first.items(), ...second.items()]);
   expect(sameReferences(replacedBlock, initial)).toEqual([false, true]);

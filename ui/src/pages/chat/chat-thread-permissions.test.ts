@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished } from "vitest";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { nativeMessage, text, toolResult } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
 import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
@@ -15,14 +16,16 @@ const permissionMissing = {
   capabilities: ["screenRecording"],
   state: "denied",
 };
-const permissionResult = (timestamp = Date.now()) => ({
-  role: "toolResult",
-  timestamp,
-  toolCallId: "capture",
-  toolName: "nodes",
-  isError: true,
-  content: [{ type: "text", text: "Screen Recording permission is missing." }],
-  details: { permissionMissing },
+const permissionResult = (timestamp = Date.now()) =>
+  toolResult("capture", "nodes", [text("Screen Recording permission is missing.")], timestamp, {
+    isError: true,
+    details: { permissionMissing },
+  });
+const call = (id: string, name: string, action: string) => ({
+  type: "toolCall",
+  id,
+  name,
+  arguments: { action },
 });
 const toolCards = (items: ReturnType<typeof buildItems>) =>
   items.flatMap((item) =>
@@ -34,41 +37,23 @@ const toolCards = (items: ReturnType<typeof buildItems>) =>
 it.each(["prepare_pr", "publish"])(
   "keeps a sibling permission request when GitHub %s details are hidden",
   (action) => {
+    const outcome =
+      action === "prepare_pr"
+        ? { status: "started", async: true, yielded: true }
+        : { status: "published" };
     const groups = buildItems({
       showToolCalls: false,
       messages: [
-        {
-          role: "assistant",
+        nativeMessage(
+          "assistant",
+          [call("github", "github_publish", action), call("capture", "nodes", "screen_record")],
+          1_000,
+          { id: "batched-calls", seq: 1, runId: "run" },
+          { runId: "run" },
+        ),
+        toolResult("github", "github_publish", [text(JSON.stringify(outcome))], 1_001, {
           runId: "run",
-          timestamp: 1_000,
-          __openclaw: { id: "batched-calls", seq: 1, runId: "run" },
-          content: [
-            { type: "toolCall", id: "github", name: "github_publish", arguments: { action } },
-            {
-              type: "toolCall",
-              id: "capture",
-              name: "nodes",
-              arguments: { action: "screen_record" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          runId: "run",
-          timestamp: 1_001,
-          toolCallId: "github",
-          toolName: "github_publish",
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                action === "prepare_pr"
-                  ? { status: "started", async: true, yielded: true }
-                  : { status: "published" },
-              ),
-            },
-          ],
-        },
+        }),
         { ...permissionResult(1_002), runId: "run" },
       ],
     });

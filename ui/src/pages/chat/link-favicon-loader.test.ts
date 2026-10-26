@@ -47,11 +47,10 @@ it("defers offscreen links and releases their shared URL after the last image le
 });
 
 function appendPlaceholder(): HTMLImageElement {
-  const root = document.createElement("div");
-  root.innerHTML =
-    '<a href="https://docs.example.com"><img class="markdown-link-favicon" data-link-favicon-host="docs.example.com" alt=""></a>';
-  document.body.append(root);
-  return root.querySelector("img") as HTMLImageElement;
+  const image = document.createElement("img");
+  image.className = "markdown-link-favicon";
+  image.dataset.linkFaviconHost = "docs.example.com";
+  return document.body.appendChild(image);
 }
 
 const localState = {

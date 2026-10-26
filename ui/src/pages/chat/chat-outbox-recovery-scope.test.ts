@@ -12,15 +12,6 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
-function useMemoryOnlyStorage() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-  vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-    throw new Error("quota");
-  });
-}
 function reopen(host: ReturnType<typeof makeChatHost>, connectionEpoch = host.connectionEpoch) {
   const reopened = makeChatHost({
     client: host.client,
@@ -33,7 +24,11 @@ function reopen(host: ReturnType<typeof makeChatHost>, connectionEpoch = host.co
   return reopened;
 }
 function sendingHost(chatMessage: string, send: (params: unknown) => unknown) {
-  useMemoryOnlyStorage();
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+  vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
   const host = makeChatHost({
     sessionKey: "agent:main:retained",
     currentSessionId: "original-physical-session",
@@ -126,13 +121,17 @@ it.each(["acknowledged", "rejected"] as const)(
       }
       await sending;
 
-      if (outcome === "rejected") {
-        expect(reopened.chatQueue).toMatchObject([
-          { text: "Synthetic in-flight input", sendState: "failed", sendError: "Rejected input" },
-        ]);
-      } else {
-        expect(reopened.chatQueue).toEqual([]);
-      }
+      expect(reopened.chatQueue).toMatchObject(
+        outcome === "rejected"
+          ? [
+              {
+                text: "Synthetic in-flight input",
+                sendState: "failed",
+                sendError: "Rejected input",
+              },
+            ]
+          : [],
+      );
     } finally {
       response.resolve({ runId, status: "ok", messageSeq: 1 });
       await sending;
