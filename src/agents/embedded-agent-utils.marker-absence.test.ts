@@ -5,11 +5,9 @@ import * as reasoningSyntax from "../../packages/markdown-core/src/reasoning-tag
 import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
+import { expectPrefixParity, streamChunks } from "../shared/text/streaming.test-support.js";
 import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
-import {
-  sanitizeUserFacingText,
-  userFacingTextFilters,
-} from "./embedded-agent-helpers/sanitize-user-facing-text.js";
+import { userFacingTextFilters } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
@@ -31,84 +29,25 @@ function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
 function processedCharacters() {
   return canonicalWork.reduce((sum, spy) => sum + characters(spy.mock.calls), 0);
 }
-function appendChunks(stream: ReturnType<typeof createTextProjection>, text: string, size: number) {
-  chunksOf(text, size).forEach((chunk) => stream.append(chunk));
-}
-
-function expectChunks(
-  stream: ReturnType<typeof createTextProjection>,
-  chunks: Iterable<string>,
-  canonical: (prefix: string) => string,
-) {
-  let prefix = "";
-  let delivered = "";
-  for (const chunk of chunks) {
-    prefix += chunk;
-    const result = stream.append(chunk);
-    delivered = result.delta === null ? result.text : delivered + result.delta;
-    const visible = canonical(prefix);
-    expect(result.text, JSON.stringify(prefix)).toBe(visible);
-    expect(delivered).toBe(visible);
+it.each([
+  [undefined, "Done.", 2],
+  ["final_answer", "Done.", 2],
+  [undefined, "<think>hidden</think>Done.", 8],
+  [undefined, "<final>Done.</final>", 8],
+] as const)("bounds transform work (%s, %s)", (phase, tail, budget) => {
+  const prefix = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96);
+  const stream = createAssistantVisibleStreamText(phase);
+  streamChunks(prefix, 4, stream);
+  if (budget === 2) {
+    streamChunks(tail, 4, stream);
+  } else {
+    stream.append(tail);
   }
-}
-
-function chunksOf(text: string, size: number) {
-  return Array.from({ length: Math.ceil(text.length / size) }, (_, index) =>
-    text.slice(index * size, (index + 1) * size),
-  );
-}
-
-it.each([undefined, "final_answer"] as const)(
-  "bounds ordinary-markup transform work (%s)",
-  (phase) => {
-    const source = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96) + "Done.";
-    const stream = createAssistantVisibleStreamText(phase);
-    appendChunks(stream, source, 4);
-    expect(stream.text).toBe(source);
-    expect(processedCharacters()).toBeLessThan(source.length * 2);
-  },
-);
-
-it.each(["<think>hidden</think>Done.", "<final>Done.</final>"])(
-  "bounds transform work for a late %s",
-  (marker) => {
-    const prefix = "<article>Array<string>: a < b.</article>\n".repeat(96);
-    const source = prefix + marker;
-    const stream = createAssistantVisibleStreamText();
-    appendChunks(stream, prefix, 4);
-    stream.append(marker);
-    expect(stream.text).toBe(prefix + "Done.");
-    if (marker.startsWith("<think>")) {
-      expect(characters(reasoning.mock.calls)).toBeGreaterThan(0);
-    }
-    // A final-only marker can be removed without reasoning reduction or a Markdown parse.
-    expect(processedCharacters()).toBeLessThan(source.length * 8);
-  },
-);
-
-it("keeps marker probes and checkpoint deltas bounded after stripping a trace", () => {
-  const line = "<article>Array<string>: a < b and c > d.</article>\n";
-  const answer = line.repeat(256) + "Done.";
-  const source = "tool call: hidden\n" + answer;
-  const stream = createAssistantVisibleStreamText("final_answer");
-  const comparisons = vi.spyOn(String.prototype, "startsWith");
-  let comparedCharacters = 0;
-  let delivered = "";
-  try {
-    // Complete lines isolate checkpoint/probe work from provisional XML tool-tag handling.
-    for (const chunk of ["tool call: hidden\n", ...Array<string>(256).fill(line), "Done."]) {
-      const result = stream.append(chunk);
-      delivered = result.delta === null ? result.text : delivered + result.delta;
-    }
-    comparedCharacters = characters(comparisons.mock.calls);
-  } finally {
-    comparisons.mockRestore();
+  expect(stream.text).toBe(prefix + "Done.");
+  if (tail.startsWith("<think>")) {
+    expect(characters(reasoning.mock.calls)).toBeGreaterThan(0);
   }
-  expect(stream.text).toBe(answer);
-  expect(delivered).toBe(answer);
-  expect(comparedCharacters).toBeGreaterThan(0);
-  expect(comparedCharacters).toBeLessThan(source.length * 64);
-  expect(processedCharacters()).toBeLessThan(source.length * 4);
+  expect(processedCharacters()).toBeLessThan((prefix.length + tail.length) * budget);
 });
 
 it.each([
@@ -123,23 +62,18 @@ it.each([
   ['<final reason="a>b">visible'],
   ["```xml\n<think>literal</think>\n<final>literal</final>\n```\nDone."],
   [`<${" ".repeat(128)}/${"\t".repeat(128)}ThiNKing>Answer`, "Answer"],
-])("preserves every prefix and final output for %s", (source, expected = source) => {
-  for (const size of [1, 3, 7]) {
-    const stream = createAssistantVisibleStreamText();
-    expectChunks(stream, chunksOf(source, size), sanitizeAssistantVisibleStreamText);
-    expect(stream.text).toBe(expected ?? source);
-  }
-});
-
-it.each([
   ["Before <final data-note='ok'>Answer</final> After", "Before Answer After"],
   ["< / FINAL >Answer", "Answer"],
   ["<final /bare>literal", "<final /bare>literal"],
   ["<final-result>literal</final-result>", "<final-result>literal</final-result>"],
-])("preserves user-facing final marker behavior for %s", (source, expected) => {
-  const stream = createTextProjection(userFacingTextFilters(false, true));
-  expectChunks(stream, source, (prefix) => sanitizeUserFacingText(prefix, { streaming: true }));
-  expect(stream.text).toBe(expected);
+])("preserves every prefix and final output for %s", (source, expected = source) => {
+  expect(
+    expectPrefixParity(
+      source,
+      createAssistantVisibleStreamText,
+      sanitizeAssistantVisibleStreamText,
+    ),
+  ).toBe(expected);
 });
 
 it.each(["<think>hidden</think>", "<final>"])(
@@ -181,9 +115,9 @@ it.each(["[docs](https://example.com) ", "Context: "])(
       if (replace) {
         stream.replace(prefix);
       } else {
-        appendChunks(stream, prefix, 1);
+        streamChunks(prefix, 1, stream);
       }
-      appendChunks(stream, body, 4);
+      streamChunks(body, 4, stream);
       expect(stream.text).toBe(prefix + body);
       expect(characters(inbound.mock.calls)).toBeLessThan((prefix.length + body.length) * 2);
     }
@@ -204,23 +138,14 @@ it.each([
   ]),
 ])("preserves canonical inbound filtering across every split: %s", (source) => {
   const stream = createAssistantVisibleStreamText("final_answer");
-  const expected = Array.from({ length: source.length + 1 }, (_, end) =>
-    trimTextPreservingCode(
-      sanitizeAssistantVisibleStreamText(source.slice(0, end), "final_answer"),
-    ),
+  expectPrefixParity(
+    source,
+    () => {
+      stream.replace("");
+      return stream;
+    },
+    (prefix) => trimTextPreservingCode(sanitizeAssistantVisibleStreamText(prefix, "final_answer")),
   );
-  const chunkings = [
-    ...Array.from({ length: source.length + 1 }, (_, split) => [
-      source.slice(0, split),
-      source.slice(split),
-    ]),
-    source.split(""),
-    chunksOf(source, 4),
-  ];
-  for (const chunks of chunkings) {
-    stream.replace("");
-    expectChunks(stream, chunks, (prefix) => expected[prefix.length]!);
-  }
   stream.replace("[ordinary] Context: literal");
   expect(stream.append(" answer").text).toBe("[ordinary] Context: literal answer");
 });

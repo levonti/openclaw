@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { attachEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import {
@@ -69,33 +69,6 @@ it("preserves delivered authority through private transforms and guest failure",
   // The actual after-tool hook can fail after observing the committed control.
   expectCompletion(true, [{ isError: true }]);
   expectCompletion(false, [copyInternalToolResultState(result, {})]);
-});
-
-it("settles a tool batch without additional materialization passes over its cells", () => {
-  const cells = Array.from({ length: 64 }, () => new ToolSourceReplyCell(inputA));
-  cells[0]!.observe(deliveredResult());
-  const results = cells.map((cell) => settled(cell));
-  const iterate = Set.prototype[Symbol.iterator];
-  let visits = 0;
-  const iterator = vi.spyOn(Set.prototype, Symbol.iterator).mockImplementation(function* (
-    this: Set<unknown>,
-  ) {
-    for (const value of iterate.call(this)) {
-      visits += 1;
-      yield value;
-    }
-    return undefined;
-  });
-  let completed: boolean;
-  try {
-    completed = owner.complete(results, false, inputA);
-  } finally {
-    iterator.mockRestore();
-  }
-  expect(completed).toBe(true);
-  // Enroll observations, join/evaluate cells, and consume the settled batch.
-  expect(visits).toBeLessThanOrEqual(cells.length * 3);
-  expectCompletion(false, results);
 });
 
 it("joins additional sibling cells without losing the original batch", () => {

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  assertAgainstBaseline,
   evaluateAgainstBaseline,
   isAnthropicToolProbeDrift,
   resolveCacheProbeMaxTokens,
@@ -24,19 +23,32 @@ function cacheRun(usage: CacheRun["usage"], hitRate = 0.999): CacheRun {
 const emptyFindings = (): BaselineFindings => ({ regressions: [], warnings: [] });
 
 describe("live cache regression runner", () => {
-  it("keeps OpenAI text cache floor misses advisory", () => {
-    const result = emptyFindings();
-    assertAgainstBaseline({
-      lane: "stable",
-      provider: "openai",
-      result: { best: cacheRun({ cacheRead: 0, cacheWrite: 0, input: 5_034 }, 0) },
-      ...result,
-    });
-
-    expect(result).toStrictEqual({
-      regressions: [],
-      warnings: ["openai:stable cacheRead=0 < min=4608", "openai:stable hitRate=0.000 < min=0.900"],
-    });
+  const hit = cacheRun({ cacheRead: 5_742 });
+  it.each([
+    [
+      "openai",
+      "stable",
+      { best: cacheRun({ input: 5_034 }, 0) },
+      {
+        regressions: [],
+        warnings: [
+          "openai:stable cacheRead=0 < min=4608",
+          "openai:stable hitRate=0.000 < min=0.900",
+        ],
+      },
+    ],
+    ["anthropic", "image", { best: hit, warmup: cacheRun({ cacheRead: 5_741 }) }, emptyFindings()],
+    [
+      "anthropic",
+      "image",
+      { best: hit, warmup: cacheRun({ cacheRead: 0 }, 0) },
+      {
+        regressions: ["anthropic:image warmup cacheWrite=0 < min=1"],
+        warnings: [],
+      },
+    ],
+  ] as const)("classifies %s %s baseline evidence (%j)", (provider, lane, result, expected) => {
+    expect(evaluateAgainstBaseline({ provider, lane, result })).toEqual(expected);
   });
 
   it("retries hard cache baseline misses once", () => {
@@ -48,9 +60,9 @@ describe("live cache regression runner", () => {
   });
 
   it.each([
-    ["openai", "openai-responses", "gpt-5.5", "warnings"],
-    ["anthropic", "anthropic-messages", "claude-sonnet-4-6", "regressions"],
-  ] as const)("classifies missing %s prerequisites", async (provider, api, model, severity) => {
+    ["openai", "openai-responses", "warnings"],
+    ["anthropic", "anthropic-messages", "regressions"],
+  ] as const)("classifies missing %s prerequisites", async (provider, api, severity) => {
     const result = emptyFindings();
     const summary = { [provider]: {} };
     const message = `No ${provider} ${api} model available in registry.`;
@@ -58,8 +70,8 @@ describe("live cache regression runner", () => {
       config: {
         provider,
         api,
-        envVar: `OPENCLAW_LIVE_${provider.toUpperCase()}_CACHE_MODEL`,
-        preferredModelIds: [model],
+        envVar: "UNUSED_MODEL",
+        preferredModelIds: [],
       },
       resolver: async () => {
         throw new LiveCachePrerequisiteSkip(provider, message);
@@ -118,27 +130,4 @@ describe("live cache regression runner", () => {
     expect(accept({ input: 5_000 }, "wrong")).toBe(false);
     expect(accept({})).toBe(false);
   });
-
-  it.each([
-    { hitRate: 0.999, usage: { cacheRead: 5_741, cacheWrite: 0, input: 3 }, regressions: [] },
-    {
-      hitRate: 0,
-      usage: { cacheRead: 0, cacheWrite: 0, input: 5_741 },
-      regressions: ["anthropic:image warmup cacheWrite=0 < min=1"],
-    },
-  ])(
-    "requires cache evidence in the warmup ($hitRate hit rate)",
-    ({ hitRate, usage, regressions }) => {
-      const findings = evaluateAgainstBaseline({
-        lane: "image",
-        provider: "anthropic",
-        result: {
-          best: cacheRun({ cacheRead: 5_742, cacheWrite: 0, input: 3 }),
-          warmup: cacheRun(usage, hitRate),
-        },
-      });
-
-      expect(findings).toEqual({ regressions, warnings: [] });
-    },
-  );
 });
