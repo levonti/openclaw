@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
 import {
@@ -43,7 +44,7 @@ function predecessor(absent = false, refuse = false) {
       'base', '["source.txt"]', ?, ?, 'refs/openclaw/results/pending', 'canonical',
       '["paused-runtime"]', '{"pending":"rollback"}', ?, 7, 1)`)
     .run(baseline, baselineRef, new Uint8Array([0, 17, 255]));
-  const before = database.prepare("SELECT rowid, * FROM local_workspace_projections").get();
+  const before = projection(database);
   if (absent) {
     database.exec("DROP TABLE local_workspace_projections;");
   }
@@ -52,6 +53,17 @@ function predecessor(absent = false, refuse = false) {
       BEGIN SELECT RAISE(ABORT, 'workspace schema publication interrupted'); END;`);
   }
   return { options: { env, path: pathname }, pathname, before };
+}
+
+function projection(database: DatabaseSync | EngineConnection) {
+  return database.prepare("SELECT rowid, * FROM local_workspace_projections").get();
+}
+
+function expectVersion(
+  database: DatabaseSync | EngineConnection,
+  version = OPENCLAW_STATE_SCHEMA_VERSION,
+) {
+  expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
 }
 
 it.each([false, true])(
@@ -75,9 +87,7 @@ it.each([false, true])(
         ],
         () => openOpenClawStateDatabase(options),
       );
-      expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
+      expectVersion(database.db);
       expect(
         database.db
           .prepare(
@@ -90,12 +100,7 @@ it.each([false, true])(
           : [{ name: "local_workspace_manifest_nodes" }, { name: "local_workspace_projections" }],
       );
       if (!absent) {
-        expect(
-          database.db.prepare("SELECT rowid, * FROM local_workspace_projections").get(),
-        ).toEqual({
-          ...before,
-          checkpoint_json: null,
-        });
+        expect(projection(database.db)).toEqual({ ...before, checkpoint_json: null });
         expect(database.db.prepare("SELECT * FROM local_workspace_manifest_nodes").all()).toEqual(
           [],
         );
@@ -109,12 +114,7 @@ it.each([false, true])(
       const reopened = openOpenClawStateDatabase(options);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
       if (!absent) {
-        expect(
-          reopened.db.prepare("SELECT rowid, * FROM local_workspace_projections").get(),
-        ).toEqual({
-          ...before,
-          checkpoint_json: null,
-        });
+        expect(projection(reopened.db)).toEqual({ ...before, checkpoint_json: null });
       }
     });
   },
@@ -128,10 +128,8 @@ it("rolls back interrupted workspace schema acceptance and retries with the orig
   await closeOpenClawStateDatabaseAsync();
   {
     using database = new DatabaseSync(pathname);
-    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 30 });
-    expect(database.prepare("SELECT rowid, * FROM local_workspace_projections").get()).toEqual(
-      before,
-    );
+    expectVersion(database, 30);
+    expect(projection(database)).toEqual(before);
     expect(
       database
         .prepare("SELECT name FROM sqlite_schema WHERE name = 'local_workspace_manifest_nodes'")
@@ -141,12 +139,7 @@ it("rolls back interrupted workspace schema acceptance and retries with the orig
   }
   await withStateMigrationBackupForTest(options, () => {
     const database = openOpenClawStateDatabase(options);
-    expect(database.db.prepare("SELECT rowid, * FROM local_workspace_projections").get()).toEqual({
-      ...before,
-      checkpoint_json: null,
-    });
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
+    expect(projection(database.db)).toEqual({ ...before, checkpoint_json: null });
+    expectVersion(database.db);
   });
 });
