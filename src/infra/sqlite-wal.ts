@@ -493,12 +493,12 @@ export function configureSqliteWalMaintenance(
       }),
     );
   if (timerIntervalMs > 0) {
-    schedule("periodic", timerIntervalMs, () => {
+    schedule("periodic", timerIntervalMs, async () => {
       // Inspect the published handle before identity admission or synchronous cleanup.
       if (tripwireDatabasePath && splitBrainDetectionEnabled) {
         let splitBrain: SqliteWalSplitBrainEvent | undefined;
         try {
-          splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+          splitBrain = await detectSqliteWalSplitBrain(tripwireDatabasePath);
         } catch (error) {
           splitBrainDetectionEnabled = false;
           log.warn("SQLite WAL split-brain detection disabled", {
@@ -511,6 +511,9 @@ export function configureSqliteWalMaintenance(
           invalidated = true;
           scope.beginClose();
           terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
+        }
+        if (scope.signal.aborted) {
+          return;
         }
       }
       nextPageBudget = 512;
