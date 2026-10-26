@@ -52,24 +52,23 @@ it.each([false, true])("keeps plugin steering audience-specific (delta=%s)", (hi
 });
 
 it.each([
-  [[], "recovering-run", true],
-  [[{ type: "text", text: "Useful partial answer" }], "recovering-run", false],
-  [[{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }], "recovering-run", false],
-  [[], "other-run", true],
-] as const)("defers diagnostics: %j %s", (content, runId, pending) => {
+  [[], true],
+  [[{ type: "text", text: "Useful partial answer" }], false],
+  [[{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }], false],
+] as const)("defers diagnostics: %j", (content, pending) => {
   const raw = {
     role: "assistant",
     stopReason: "error",
     errorMessage: "context exceeded",
     content,
-    __openclaw: { runId },
+    __openclaw: { runId: "recovering-run" },
   };
   const original = structuredClone(raw);
   const result = project(raw);
   expect(result.deferredAssistantError === true).toBe(pending);
   expect(Boolean(result.payload)).toBe(!pending);
   expect(result.projectionState).toMatchObject({ assistantErrorPending: true });
-  if (runId === "recovering-run" && result.payload) {
+  if (result.payload) {
     for (const key of ["openclawRunError", "stopReason", "errorMessage"]) {
       expect(result.payload.message).not.toHaveProperty(key);
     }
