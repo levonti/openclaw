@@ -208,6 +208,9 @@ export function resolveAvatarImageUrl(
   if (!trusted) {
     return unmanagedUrl;
   }
+  if (!origin && !authTokens.length) {
+    return trusted;
+  }
   return loadIdentityAvatar(
     trusted,
     !authTokens.length && origin !== null && origin === globalThis.location?.origin,

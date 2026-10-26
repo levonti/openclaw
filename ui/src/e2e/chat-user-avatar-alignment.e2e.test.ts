@@ -22,6 +22,7 @@ suite.define(() => {
         if (!holdPhoto) {
           return route.fulfill({ response: image });
         }
+        return undefined;
       });
       await installMockGateway(page, {
         authMethod: "trusted-proxy",

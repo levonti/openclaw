@@ -272,6 +272,16 @@ describe("resolveAvatar profile-id senders", () => {
 });
 
 describe("authenticated profile avatar cache", () => {
+  it("keeps unconnected trusted image sources synchronous without fetching", () => {
+    setAvatarGatewayOrigin(null);
+    const fetchAvatar = vi.spyOn(globalThis, "fetch");
+    expect(resolveAvatarImageUrl("/avatar/research")).toBe("/avatar/research");
+    expect(resolveAvatarImageUrl("/api/users/self/avatar?v=1#fragment")).toBe(
+      "/api/users/self/avatar?v=1",
+    );
+    expect(fetchAvatar).not.toHaveBeenCalled();
+  });
+
   it("shares unknown reads and misses while reusing verified URLs only in their admitted scope", async () => {
     const origin = "https://gateway.example.test";
     const url = `${origin}/api/users/profile-ada/avatar?v=7`;
