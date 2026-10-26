@@ -628,6 +628,7 @@ merge_run() {
   local MERGE_PRIOR_CI_REST_OBSERVATION=false
   local MERGE_PRIOR_CI_RECALCULATED=false
   local MERGE_PRIOR_CI_MAIN_FLOOR="" MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
+  local MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS=""
   local MERGE_PRIOR_CI_IMMUTABLE="" MERGE_PRIOR_CI_QUALIFIED_RESPONSE=""
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
@@ -1167,6 +1168,7 @@ merge_run() {
           GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true requalify-prior-ci "$MERGE_PRIOR_CI_MAIN_FLOOR" "$qualified_observation" "$snapshot_main" || authority_result=$?
         else
           merge_outcome_stable "$pr" false requalify-prior-ci "$MERGE_PRIOR_CI_MAIN_FLOOR" || return 1
+          MERGE_PRIOR_CI_MAIN_FLOOR="$MERGE_OBSERVED_MAIN"
           if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
             # The fallback's new inventory belongs to the next qualified round.
             authority_result=76
@@ -1188,25 +1190,29 @@ merge_run() {
                 verify-main-sources "$MERGE_OBSERVED_MAIN" >/dev/null || return 1
             fi
             MERGE_PRIOR_CI_MAIN_FLOOR=""
+            MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS=""
             authority_ready=true
             ;;
           75)
             MERGE_PRIOR_CI_PROOF=""
-            [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" ] || return 1
+            [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" ] &&
+              [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS" ] || return 1
             # Fetching proves ancestry, not a fresh projection. Retain that floor
             # separately so another missing tip cannot replace it before proof.
             rematerialized_main="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
             rematerialization_started=$(pr_merge_now)
-            verify_merge_main_advance "${MERGE_PRIOR_CI_MAIN_FLOOR:-$MERGE_OBSERVED_MAIN}" "$rematerialized_main" || return 1
+            verify_merge_main_advance "$MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS" "$rematerialized_main" || return 1
             if [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
               MERGE_PRIOR_CI_UNKNOWN_START=$((MERGE_PRIOR_CI_UNKNOWN_START + $(pr_merge_now) - rematerialization_started))
             fi
             MERGE_PRIOR_CI_MAIN_FLOOR="$rematerialized_main"
             MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""
+            MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS=""
             ;;
           76)
             MERGE_PRIOR_CI_PROOF=""
             MERGE_PRIOR_CI_MAIN_FLOOR=""
+            MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS=""
             if [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
               merge_wait_for_projection "$pr" "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" "$MERGE_PRIOR_CI_UNKNOWN_DELAY" "mergeability recalculation" || return 1
               MERGE_PRIOR_CI_UNKNOWN_DELAY="$MERGE_PROJECTION_DELAY"

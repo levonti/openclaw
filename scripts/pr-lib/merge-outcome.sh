@@ -990,7 +990,7 @@ merge_outcome_stable() {
         proof_started=$(pr_merge_now)
         if [ -n "$before" ] && [ "$before" != "$main" ]; then
           verify_merge_main_advance "$proof_main" "$before" "$local_only" "${3:-}" || advance_result=$?
-          proof_main="$before"
+          [ "$advance_result" -ne 0 ] || proof_main="$before"
         fi
         if [ "$advance_result" -eq 0 ]; then
           verify_merge_main_advance "$proof_main" "$main" "$local_only" "${3:-}" || advance_result=$?
@@ -1007,7 +1007,10 @@ merge_outcome_stable() {
           settle_deadline=$((settle_deadline + local_proof_seconds))
         fi
         if [ "$advance_result" -ne 0 ]; then
-          [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ] && return 75
+          if [ "$advance_result" -eq 75 ] && [ -n "${MERGE_PRIOR_CI_REMATERIALIZE_MAIN:-}" ]; then
+            MERGE_PRIOR_CI_REMATERIALIZE_PREVIOUS="$proof_main"
+            return 75
+          fi
           return 1
         fi
         MERGE_PRIOR_CI_REMATERIALIZE_MAIN=""

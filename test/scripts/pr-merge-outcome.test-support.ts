@@ -20,6 +20,7 @@ type MergeObservation = {
   pr?: Record<string, unknown>;
   advanceMain?: boolean;
   advanceMainFrom?: string;
+  advanceMainAfterPolicy?: boolean;
   priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
   restUnseenSuite?: string;
   advanceSeconds?: number;
@@ -469,6 +470,7 @@ const advanceMain=(parent=main())=>{
   s.mainAdvances.push(next);
 };
 const applyRestObservation=(next=s.restObservation)=>{
+  const deferred=next.advanceMainAfterPolicy?{advanceMain:true,advanceMainFrom:next.advanceMainFrom,afterPolicyRead:true}:null;
   if(next.main) git(["push","-q","--force","origin",next.main+":refs/heads/main"]);
   if(next.pr) Object.assign(s.pr,next.pr);
   if(next.advanceMain) advanceMain(next.advanceMainFrom);
@@ -477,7 +479,7 @@ const applyRestObservation=(next=s.restObservation)=>{
   if(next.priorCi) Object.assign(s.priorCi,next.priorCi);
   if(next.restUnseenSuite) s.restUnseenSuite=next.restUnseenSuite;
   if(next.advanceSeconds) advanceClock(next.advanceSeconds);
-  s.restObservationAppliedAt=s.restMainReads;s.restObservation=null;save();
+  s.restObservationAppliedAt=s.restMainReads;s.restObservation=deferred;save();
 };
 ${priorCiSecurityFixtureSource}
 if(securityResponse()) {
