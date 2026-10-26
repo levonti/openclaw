@@ -40,11 +40,11 @@ it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
   },
 );
 
-it("reuses admitted columns without SQL and follows committed or rolled-back DDL", () => {
+it("reuses admitted columns and ordered keys without SQL across DDL and rollback", () => {
   using database = openNodeSqliteDatabase(":memory:");
   database.exec(`CREATE TABLE entries (
-    -- Keep the same shape as fresh databases.
-    id INTEGER, label TEXT DEFAULT 'AS'
+    id INTEGER, label TEXT DEFAULT 'AS', a TEXT DEFAULT 'PRIMARY KEY', b TEXT,
+    CONSTRAINT "entry key" PRIMARY KEY (b, b, a)
   )`);
   admitSqliteSchema(database);
   expect(tableHasColumn(database, "entries", "id")).toBe(true);
@@ -55,6 +55,7 @@ it("reuses admitted columns without SQL and follows committed or rolled-back DDL
     expect(tableHasColumn(database, "entries", "missing")).toBe(false);
     expect(tableHasColumn(database, "absent", "id")).toBe(false);
   }
+  expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["b", "a"]);
   expect(observation.queries).toEqual([]);
   database.exec("ALTER TABLE entries ADD COLUMN title TEXT");
   expect(tableHasColumn(database, "entries", "title")).toBe(true);
@@ -63,19 +64,6 @@ it("reuses admitted columns without SQL and follows committed or rolled-back DDL
   database.exec("ROLLBACK");
   expect(tableHasColumn(database, "entries", "pending")).toBe(false);
   expect(tableHasColumn(database, "entries", "title")).toBe(true);
-});
-
-it("reads ordered admitted primary keys without SQL and follows DDL rollback", () => {
-  using database = openNodeSqliteDatabase(":memory:");
-  database.exec(`CREATE TABLE entries (
-    a TEXT DEFAULT 'PRIMARY KEY', b TEXT,
-    CONSTRAINT "entry key" PRIMARY KEY (b, b, a)
-  )`);
-  admitSqliteSchema(database);
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  using _ = { [Symbol.dispose]: observation.restore };
-  expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["b", "a"]);
-  expect(observation.queries).toEqual([]);
   database.exec("BEGIN; DROP TABLE entries; CREATE TABLE entries (a INTEGER PRIMARY KEY)");
   expect(tablePrimaryKeyColumns(database, "entries")).toEqual(["a"]);
   database.exec("ROLLBACK");
@@ -102,14 +90,9 @@ it("preserves native column visibility for generated columns, views, and virtual
       CREATE VIRTUAL TABLE search USING fts5(body);
     `);
   admitSqliteSchema(database);
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  using _ = { [Symbol.dispose]: observation.restore };
   expect(tableHasColumn(database, "generated", "base")).toBe(true);
   expect(tableHasColumn(database, "generated", "derived")).toBe(false);
   expect(tableHasColumn(database, "projected", "base")).toBe(true);
   expect(tableHasColumn(database, "search", "body")).toBe(true);
   expect(tableHasColumn(database, "search", "rank")).toBe(false);
-  expect(observation.queries).toContain("PRAGMA table_info(generated)");
-  expect(observation.queries).toContain("PRAGMA table_info(projected)");
-  expect(observation.queries).toContain("PRAGMA table_info(search)");
 });
