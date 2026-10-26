@@ -1,4 +1,3 @@
-// Covers exec allowlist pattern matching.
 import { describe, expect, it, vi } from "vitest";
 import { matchAllowlist, type ExecAllowlistEntry } from "./exec-approvals.js";
 
@@ -18,6 +17,8 @@ function executable(
 
 describe("exec allowlist matching", () => {
   const baseResolution = executable("rg", "/opt/homebrew/bin/rg");
+  const pathMatch = (pattern: string, resolution = baseResolution) =>
+    matchAllowlist([{ pattern }], resolution)?.pattern ?? null;
 
   it("prepares a revision's patterns once and follows replaced or edited entries", () => {
     const entry: ExecAllowlistEntry = { pattern: "/opt/**/r?" };
@@ -55,30 +56,26 @@ describe("exec allowlist matching", () => {
       ["/opt/*/rg", null],
     ] as const;
     for (const [pattern, expectedPattern] of cases) {
-      const match = matchAllowlist([{ pattern }], baseResolution);
-      expect(match?.pattern ?? null).toBe(expectedPattern);
+      expect(pathMatch(pattern)).toBe(expectedPattern);
     }
   });
 
   it("matches bare command-name patterns against PATH-resolved executable basenames", () => {
-    expect(matchAllowlist([{ pattern: "rg" }], baseResolution)?.pattern).toBe("rg");
-    expect(matchAllowlist([{ pattern: "r?" }], baseResolution)?.pattern).toBe("r?");
-    expect(matchAllowlist([{ pattern: "homebrew" }], baseResolution)).toBeNull();
+    expect(pathMatch("rg")).toBe("rg");
+    expect(pathMatch("r?")).toBe("r?");
+    expect(pathMatch("homebrew")).toBeNull();
   });
 
   it("does not let bare command-name patterns match path-selected executables", () => {
-    const relativeResolution = executable("./rg", "/tmp/openclaw-workspace/rg");
-    const absoluteResolution = executable("/tmp/openclaw-workspace/rg");
-
-    expect(matchAllowlist([{ pattern: "rg" }], relativeResolution)).toBeNull();
-    expect(matchAllowlist([{ pattern: "rg" }], absoluteResolution)).toBeNull();
+    expect(pathMatch("rg", executable("./rg", "/tmp/openclaw-workspace/rg"))).toBeNull();
+    expect(pathMatch("rg", executable("/tmp/openclaw-workspace/rg"))).toBeNull();
   });
 
-  it.each(["win32"])("honors argPattern checks for bare command-name matches on %s", (platform) => {
+  it("honors argPattern checks for bare command-name matches on win32", () => {
     const entries = [{ pattern: "rg", argPattern: "^--json$" }];
 
-    expect(matchAllowlist(entries, baseResolution, ["rg", "--json"], platform)?.pattern).toBe("rg");
-    expect(matchAllowlist(entries, baseResolution, ["rg", "--files"], platform)).toBeNull();
+    expect(matchAllowlist(entries, baseResolution, ["rg", "--json"], "win32")?.pattern).toBe("rg");
+    expect(matchAllowlist(entries, baseResolution, ["rg", "--files"], "win32")).toBeNull();
   });
 
   describe("argPattern path matches", () => {
@@ -101,27 +98,23 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist([explicit], resolution, argv)).toBe(explicit);
     });
 
-    it.each(["win32"])("requires argv before matching argPattern entries on %s", (platform) => {
+    it("requires argv before matching argPattern entries on win32", () => {
       const restricted = { pattern: "/usr/bin/python3", argPattern: "^a\\.py$" };
       const manual = { pattern: "/usr/bin/python3" };
-      expect(matchAllowlist([restricted], resolution, undefined, platform)).toBeNull();
-      expect(matchAllowlist([restricted, manual], resolution, undefined, platform)).toBe(manual);
+      expect(matchAllowlist([restricted], resolution, undefined, "win32")).toBeNull();
+      expect(matchAllowlist([restricted, manual], resolution, undefined, "win32")).toBe(manual);
     });
 
     it("handles invalid regex gracefully", () => {
-      const entries: ExecAllowlistEntry[] = [
-        { pattern: "/usr/bin/python3", argPattern: "[invalid" },
-      ];
+      const entries = [{ pattern: "/usr/bin/python3", argPattern: "[invalid" }];
 
       expect(matchAllowlist(entries, resolution, ["python3", "a.py"])).toBeNull();
     });
 
     it("rejects split-arg bypasses against single-arg auto-generated argPattern", () => {
       const entry = { pattern: "/usr/bin/python3", argPattern: "^hello world\x00$" };
-      const entries: ExecAllowlistEntry[] = [entry];
-
-      expect(matchAllowlist(entries, resolution, ["python3", "hello world"])).toBe(entry);
-      expect(matchAllowlist(entries, resolution, ["python3", "hello", "world"])).toBeNull();
+      expect(matchAllowlist([entry], resolution, ["python3", "hello world"])).toBe(entry);
+      expect(matchAllowlist([entry], resolution, ["python3", "hello", "world"])).toBeNull();
     });
 
     it("distinguishes zero-arg patterns from one-empty-string-arg patterns", () => {
@@ -138,30 +131,22 @@ describe("exec allowlist matching", () => {
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {
     const cases = [baseResolution, executable("python3", "/usr/bin/python3")] as const;
     for (const resolution of cases) {
-      expect(matchAllowlist([{ pattern: "*" }], resolution)?.pattern).toBe("*");
+      expect(pathMatch("*", resolution)).toBe("*");
     }
   });
 
   it.runIf(process.platform !== "win32")(
     "rejects wildcard path matches that escape through dot segments",
     () => {
-      expect(
-        matchAllowlist([{ pattern: "/usr/bin/**" }], executable("/usr/bin/../../bin/sh")),
-      ).toBeNull();
-      expect(
-        matchAllowlist([{ pattern: "/usr/bin/**" }], executable("/usr/bin/sub/../env"))?.pattern,
-      ).toBe("/usr/bin/**");
+      expect(pathMatch("/usr/bin/**", executable("/usr/bin/../../bin/sh"))).toBeNull();
+      expect(pathMatch("/usr/bin/**", executable("/usr/bin/sub/../env"))).toBe("/usr/bin/**");
     },
   );
 
   it("matches absolute paths containing regex metacharacters literally", () => {
-    const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
-    for (const candidatePath of plusPathCases) {
-      const match = matchAllowlist([{ pattern: candidatePath }], executable(candidatePath));
-      expect(match?.pattern).toBe(candidatePath);
-    }
-
     const literalCases = [
+      { pattern: "/usr/bin/g++", resolution: executable("/usr/bin/g++") },
+      { pattern: "/usr/bin/clang++", resolution: executable("/usr/bin/clang++") },
       { pattern: "/usr/bin/*++", resolution: executable("/usr/bin/g++") },
       {
         pattern: "/opt/builds/tool[1](stable)",
@@ -169,7 +154,7 @@ describe("exec allowlist matching", () => {
       },
     ] as const;
     for (const { pattern, resolution } of literalCases) {
-      expect(matchAllowlist([{ pattern }], resolution)?.pattern).toBe(pattern);
+      expect(pathMatch(pattern, resolution)).toBe(pattern);
     }
   });
 
@@ -180,10 +165,8 @@ describe("exec allowlist matching", () => {
       "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
     );
 
-    expect(
-      matchAllowlist([{ pattern: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg" }], resolution)
-        ?.pattern,
-    ).toBe("/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg");
-    expect(matchAllowlist([{ pattern: "/opt/homebrew/bin/rg" }], resolution)).toBeNull();
+    const realpath = "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg";
+    expect(pathMatch(realpath, resolution)).toBe(realpath);
+    expect(pathMatch("/opt/homebrew/bin/rg", resolution)).toBeNull();
   });
 });
