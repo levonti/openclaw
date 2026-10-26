@@ -127,7 +127,7 @@ describe("harness context engine lifecycle", () => {
           tokenBudget: 2000,
           warn: vi.fn(),
         },
-        { ownKeys },
+        { ownKeys: (target) => ownKeys(target) },
       );
       const result = await (operation === "assemble"
         ? assembleHarnessContextEngine(params)
