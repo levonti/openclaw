@@ -30,10 +30,7 @@ afterEach(() => {
 
 function expectLabel(indicator: Element | null | undefined, text: string) {
   expect(indicator?.getAttribute("aria-label")).toBe(text);
-  expect(indicator?.hasAttribute("title")).toBe(false);
-  expect(indicator?.closest<HTMLElement & { content?: string }>("openclaw-tooltip")?.content).toBe(
-    text,
-  );
+  expect(indicator?.getAttribute("title")).toBe(text);
 }
 
 function badge(kind: string) {
@@ -48,7 +45,7 @@ describe("session row placement badges", () => {
     renderBadges(params);
     expectLabel(badge(kind), label);
     if (kind === "approval") {
-      expect(badge(kind)?.querySelector("svg")).not.toBeNull();
+      expect(badge(kind)?.querySelector(".session-css-icon")).not.toBeNull();
     }
   });
 
@@ -58,7 +55,11 @@ describe("session row placement badges", () => {
     const indicator = badge("attention");
     expectLabel(indicator, "3 messages need attention");
     expect(indicator?.textContent).toContain("3");
-    expect(indicator?.querySelector("svg")?.isEqualNode(badge("approval svg") ?? null)).toBe(true);
+    expect(
+      indicator
+        ?.querySelector(".session-css-icon")
+        ?.isEqualNode(badge("approval .session-css-icon") ?? null),
+    ).toBe(true);
 
     renderBadges({ outboxAttentionCount: 1 });
     expect(badge("attention")?.getAttribute("aria-label")).toBe("1 message needs attention");
@@ -82,7 +83,7 @@ describe("session row placement badges", () => {
       const indicator = badge("pull-request");
       expectLabel(indicator, label);
       expect(indicator?.getAttribute("data-pull-request-state")).toBe(state);
-      expect(indicator?.querySelector("svg")).not.toBeNull();
+      expect(indicator?.querySelector(".session-css-icon")).not.toBeNull();
     },
   );
 
