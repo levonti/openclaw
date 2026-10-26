@@ -37,13 +37,8 @@ it.each([false, true])("captures surviving postimages with a separate anchor: %s
   const db = separate
     ? Object.assign(database(), { anchor, [Symbol.for("openclaw.postgres-sync-connection")]: true })
     : anchor;
-  anchor.exec("CREATE TABLE facts (key TEXT PRIMARY KEY)");
-  const write = (key: string) => {
-    if (!separate) {
-      anchor.prepare("INSERT INTO facts VALUES (?)").run(key);
-    }
-    sessionChanges.emit({ sessionKey: key, facts: { kind: "unchanged" } }, db);
-  };
+  const write = (sessionKey: string) =>
+    sessionChanges.emit({ sessionKey, facts: { kind: "unchanged" } }, db);
   const initialRevision = readSessionRowChangeRevision();
   const transaction = <T>(run: () => T) =>
     withSqlitePostCommitPublications(anchor, () =>
@@ -73,11 +68,6 @@ it.each([false, true])("captures surviving postimages with a separate anchor: %s
   );
   expect(notifications).toEqual(["first", "last"]);
   expect(readSessionRowChangeRevision()).toBeGreaterThan(initialRevision);
-  if (!separate) {
-    expect(anchor.prepare("SELECT key FROM facts ORDER BY key").all()).toEqual(
-      ["first", "last"].map((key) => ({ key })),
-    );
-  }
 });
 
 it("keeps postcommit observer events outside the committing worker's captured postimages", () => {

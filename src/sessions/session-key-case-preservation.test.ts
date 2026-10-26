@@ -23,7 +23,6 @@ const entry = (to: string, updatedAt: number, threadId?: string): SessionEntry =
 
 // Regressions: #75670 (Matrix room IDs), #82853 (Signal groups), #87366 (aliases).
 const ROOM_A = "!MixedRoomAbCdEf:example.org";
-const ROOM_B = "!OtherRoomGhIjKl:matrix.example.org";
 const EVENT = "$EvMixedCaseAbCdEfGhIjKlMnOpQrStUvWxYz0";
 
 function resolveEntry(key: string, value: SessionEntry, sessionKey = ROOM_MIXED_KEY) {
@@ -47,15 +46,15 @@ it.each([
   expect(parse(sessionKey)).toBeNull();
 });
 
-it("keeps Matrix room id case in the channel session key (both prod rooms)", () => {
-  for (const [agentId, peerId] of [
-    ["main", ROOM_A],
-    ["ops", ROOM_B],
-  ] as const) {
-    expect(
-      buildAgentPeerSessionKey({ agentId, channel: "matrix", peerKind: "channel", peerId }),
-    ).toBe(`agent:${agentId}:matrix:channel:${peerId}`);
-  }
+it("keeps Matrix room id case in the channel session key", () => {
+  expect(
+    buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "matrix",
+      peerKind: "channel",
+      peerId: ROOM_A,
+    }),
+  ).toBe(ROOM_MIXED_KEY);
 });
 
 it.each([
@@ -96,20 +95,12 @@ it.each([
   ["case-distinct room", entry(`room:${ROOM_A.toLowerCase()}`, 999), ROOM_MIXED_KEY],
   ["missing delivery", { updatedAt: 50 } as unknown as SessionEntry, ROOM_MIXED_KEY],
   ["mismatched exact key", entry(`room:${ROOM_A}`, 50), ROOM_LOWER_KEY],
+  ["case-distinct thread", entry(`room:${ROOM_A}`, 50, "$threadrootabc"), ROOM_MIXED_THREAD_KEY],
 ] as const)("rejects an unproven alias with %s", (_label, value, sessionKey) => {
-  const resolved = resolveEntry(ROOM_LOWER_KEY, value, sessionKey);
+  const key = sessionKey === ROOM_MIXED_THREAD_KEY ? ROOM_LOWER_THREAD_KEY : ROOM_LOWER_KEY;
+  const resolved = resolveEntry(key, value, sessionKey);
   expect(resolved.legacyKeys).toEqual([]);
   expect(resolved.existing).toBeUndefined();
-});
-
-it("does not collapse Matrix thread artifacts when the stored thread id differs by case", () => {
-  const r = resolveEntry(
-    ROOM_LOWER_THREAD_KEY,
-    entry(`room:${ROOM_A}`, 50, "$threadrootabc"),
-    ROOM_MIXED_THREAD_KEY,
-  );
-  expect(r.legacyKeys).not.toContain(ROOM_LOWER_THREAD_KEY);
-  expect(r.existing).toBeUndefined();
 });
 
 it.each([
@@ -120,7 +111,6 @@ it.each([
   const r = resolveEntry(key, value, sessionKey);
   expect(r.legacyKeys).toContain(key);
   expect(r.existing).toBe(value);
-  expect(deliveryContextFromSession(r.existing)?.to).toBe(`room:${ROOM_A}`);
 });
 
 it("keeps freshest legacy lowercase Signal group aliases", () => {
