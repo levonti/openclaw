@@ -15,13 +15,18 @@ import { resolveConversationRouteFingerprint } from "./conversation-route-finger
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import {
   applySessionEntryOperation,
+  patchSessionEntryCore,
+  patchSessionEntryTarget,
   recordInboundSessionMeta,
   replaceSessionEntrySync,
   updateSessionLastRouteInScope,
 } from "./session-accessor.sqlite-entry.js";
+import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { withActor } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
 
 const { getSessionEntryPatchDelivery } =
@@ -29,6 +34,113 @@ const { getSessionEntryPatchDelivery } =
 const delivery = getSessionEntryPatchDelivery();
 const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+
+it.each(["entry", "target"] as const)(
+  "prepares %s callback patches from complete current owner facts without another entry reply",
+  async (selection) => {
+    await withFixture(async (f) => {
+      const prompt = "synthetic retained instructions ".repeat(1024);
+      replaceSessionEntrySync(f.scope, {
+        ...f.read()!,
+        skillsSnapshot: { prompt, skills: [] },
+      });
+      await readSessionEntryInWorker(f.scope);
+      delivery.commands.length = 0;
+      const update = (entry: SessionEntry) => {
+        expect(entry.skillsSnapshot?.prompt).toBe(prompt);
+        return { label: "prepared from published facts" };
+      };
+      const result =
+        selection === "entry"
+          ? await patchSessionEntryCore(f.scope, update, { workerGuard: {} })
+          : await patchSessionEntryTarget({ ...f.scope, target: f.target }, update, {
+              workerGuard: {},
+            });
+      expect(result).toMatchObject({
+        label: "prepared from published facts",
+        skillsSnapshot: { prompt },
+      });
+      expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+      expect(f.read()).toEqual(result);
+    });
+  },
+);
+
+it("keeps multi-key target selection in the worker even when canonical facts are warm", async () => {
+  await withFixture(async (f) => {
+    const otherKey = "agent:main:other-worker";
+    replaceSessionEntrySync(
+      { ...f.scope, sessionKey: otherKey },
+      {
+        sessionId: "other",
+        updatedAt: 1,
+      },
+    );
+    await readSessionEntryInWorker(f.scope);
+    delivery.commands.length = 0;
+    const update = vi.fn(() => ({ label: "must not run" }));
+    await expect(
+      patchSessionEntryTarget(
+        {
+          ...f.scope,
+          target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey, otherKey] },
+        },
+        update,
+        { workerGuard: {} },
+      ),
+    ).rejects.toThrow("duplicate rows resolve to canonical session key");
+    expect(update).not.toHaveBeenCalled();
+    expect(delivery.commands).toEqual(["session.entry.patch.prepare"]);
+    expect(f.read()?.label).toBe("initial");
+  });
+});
+
+it("accepts hydrated owner ordering but rejects a changed owner during callback patches", async () => {
+  await withFixture(async (f) => {
+    const owner = assignSessionOwner(f.scope, {
+      owner: { type: "human", id: "synthetic-owner" },
+      assignedBy: { type: "system", id: "synthetic-system" },
+      assignedAt: 20,
+    });
+    await readSessionEntryInWorker(f.scope);
+    await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { pinnedAt: 30 } },
+      { skipMaintenance: true },
+    );
+    const result = await patchSessionEntryCore(
+      f.scope,
+      (entry) => {
+        // Retained facts keep owner before new metadata; SQL hydration appends it last.
+        const keys = Object.keys(entry);
+        expect(keys.indexOf("owner")).toBeLessThan(keys.indexOf("pinnedAt"));
+        return { label: "prepared with the same owner" };
+      },
+      { skipMaintenance: true, workerGuard: {} },
+    );
+    expect(result).toMatchObject({ label: "prepared with the same owner", pinnedAt: 30, owner });
+    expect(f.read()).toEqual(result);
+
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      assignSessionOwner(f.scope, {
+        owner: { type: "human", id: "replacement-owner" },
+        assignedBy: { type: "system", id: "synthetic-system" },
+        assignedAt: 40,
+      });
+    };
+    await expect(
+      patchSessionEntryCore(f.scope, () => ({ label: "stale owner patch" }), {
+        skipMaintenance: true,
+        workerGuard: {},
+      }),
+    ).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+    expect(f.read()).toMatchObject({
+      label: "prepared with the same owner",
+      owner: { actor: { type: "human", id: "replacement-owner" }, assignedAt: 40 },
+    });
+  });
+});
 
 it("keeps resident SQL metadata out of callback patch preparation and commit bytes", async () => {
   await withActor(async (f) => {
